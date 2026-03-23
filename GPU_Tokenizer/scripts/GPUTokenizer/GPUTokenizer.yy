@@ -1,0 +1,13 @@
+{
+  "$GMScript":"v1",
+  "%Name":"GPUTokenizer",
+  "isCompatibility":false,
+  "isDnD":false,
+  "name":"GPUTokenizer",
+  "parent":{
+    "name":"GPU_Tokenizer",
+    "path":"folders/GPU_Tokenizer.yy",
+  },
+  "resourceType":"GMScript",
+  "resourceVersion":"2.0",
+}

@@ -1,0 +1,12 @@
+{
+  "$GMShader":"",
+  "%Name":"sh_gpu_tokenizer",
+  "name":"sh_gpu_tokenizer",
+  "parent":{
+    "name":"Shaders",
+    "path":"folders/GPU_Tokenizer/Shaders.yy",
+  },
+  "resourceType":"GMShader",
+  "resourceVersion":"2.0",
+  "type":1,
+}
