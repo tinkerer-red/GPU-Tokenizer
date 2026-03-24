@@ -51,7 +51,7 @@ float skipRule(float pos) {
     return pos + 1.0;
 }
 
-// ── TYPE MAP: is byte B a delimiter(1), ignored(2), pattern-matched(3), or unmatched(0)? ──
+// -- TYPE MAP: is byte B a delimiter(1), ignored(2), pattern-matched(3), or unmatched(0)? --
 float computeType(float byteB) {
     float pos = 0.0;
     bool matched = false;
@@ -78,7 +78,7 @@ float computeType(float byteB) {
     return matched ? 3.0 / 255.0 : 0.0;
 }
 
-// ── MERGE TABLE: can byte A be followed by byte B within the same token? ──
+// -- MERGE TABLE: can byte A be followed by byte B within the same token? --
 bool computeMerge(float byteA, float byteB) {
     float pos = 0.0;
     for (int rule = 0; rule < 256; rule++) {
@@ -111,7 +111,7 @@ bool computeMerge(float byteA, float byteB) {
     return false;
 }
 
-// ── START-MERGE: can a token starting with byte S contain byte C? ──
+// -- START-MERGE: can a token starting with byte S contain byte C? --
 bool computeStartMerge(float byteS, float byteC) {
     float pos = 0.0;
     for (int rule = 0; rule < 256; rule++) {
@@ -134,7 +134,7 @@ bool computeStartMerge(float byteS, float byteC) {
     return false;
 }
 
-// ── CONTEXT START MAP: find longest-opener rule that starts with byte B ──
+// -- CONTEXT START MAP: find longest-opener rule that starts with byte B --
 float computeCtxStart(float byteB) {
     float pos = 0.0;
     float bestRule = 0.0;
@@ -164,7 +164,7 @@ float computeCtxStart(float byteB) {
     return bestRule / 255.0;
 }
 
-// ── CONTEXT INDEX: compute one entry (4 bytes) for rule R ──
+// -- CONTEXT INDEX: compute one entry (4 bytes) for rule R --
 // Returns: vec4(offsetLo/255, offsetHi/255, nextRule/255, flags)
 vec4 computeCtxIndex(float ruleR) {
     // First pass: find rule R's position and compute data offset
@@ -236,7 +236,7 @@ vec4 computeCtxIndex(float ruleR) {
     return vec4(offLo / 255.0, offHi / 255.0, nextRule / 255.0, flags);
 }
 
-// ── CONTEXT DATA: copy byte from compile buffer's context string data ──
+// -- CONTEXT DATA: copy byte from compile buffer's context string data --
 float computeCtxData(float dataIdx) {
     float pos = 0.0;
     float dataOff = 0.0;

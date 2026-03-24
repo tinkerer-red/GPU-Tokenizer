@@ -253,39 +253,39 @@ function GPUTokenizer() constructor {
 		buffer_fill(_compile_upload_buffer, 0, buffer_u8, 0, _compile_texture_size);
 		buffer_copy(bufCompile, 0, _compile_bytes - 1, _compile_upload_buffer, 0);
 		buffer_poke(_compile_upload_buffer, _compile_bytes - 1, buffer_u8, 0);
-
+		
 		if (surface_exists(surfCompile)) {
 			surface_free(surfCompile);
 		}
 		surfCompile = surface_create(_compile_width, _compile_height);
 		buffer_set_surface(_compile_upload_buffer, surfCompile, 0);
 		buffer_delete(_compile_upload_buffer);
-
+		
 		if (surface_exists(surfLookup)) {
 			surface_free(surfLookup);
 		}
 		surfLookup = surface_create(lookupW, lookupH);
-
+		
 		surface_set_target(surfLookup);
 		draw_clear_alpha(c_black, 0);
 		gpu_set_blendenable(false);
 		gpu_set_tex_filter(false);
 		shader_set(sh_gpu_compile);
-
+		
 		shader_set_uniform_f(cLoc_compileSize, _compile_width, _compile_height);
 		shader_set_uniform_f(cLoc_lookupSize, lookupW, lookupH);
 		shader_set_uniform_f(cLoc_compileBytes, _compile_bytes);
 		shader_set_uniform_f(cLoc_numCtxRules, ctxRuleCount);
 		shader_set_uniform_f(cLoc_ctxDataOffset, ctxDataOffset);
 		shader_set_uniform_f(cLoc_unmatchedMode, unmatchedMode);
-
+		
 		draw_surface_stretched(surfCompile, 0, 0, lookupW, lookupH);
-
+		
 		shader_reset();
 		surface_reset_target();
 		gpu_set_blendenable(true);
 		gpu_set_tex_filter(true);
-
+		
 		return self;
 	};
 	
