@@ -239,4 +239,4 @@ Good for:
 
 Special thanks to Terpatin / HannulaTero for inspiring this project through the GPUTF8 library:
 
-[https://github.com/HannulaTero/GPUTF8](https://github.com/HannulaTero/GPUTF8)
+[GPUTF8](https://github.com/HannulaTero/GPUTF8)
