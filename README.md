@@ -14,7 +14,7 @@ GPUTokenizer is built around five rule types:
 - ignored bytes
 - unmatched-byte handling
 
-Typical uses include source-code tokenization, markup tokenization, structured text splitting, syntax highlighting, and preprocessing/import pipelines. :contentReference[oaicite:1]{index=1}
+Typical uses include source-code tokenization, markup tokenization, structured text splitting, syntax highlighting, and preprocessing/import pipelines.
 
 ## Basic workflow
 
@@ -23,7 +23,7 @@ Typical uses include source-code tokenization, markup tokenization, structured t
 3. Call `compile()`.
 4. Call `tokenize()` or `tokenizeBuffer()`.
 5. Read tokens from the returned buffer.
-6. Destroy the tokenizer when finished. :contentReference[oaicite:2]{index=2}
+6. Destroy the tokenizer when finished.
 
 ## API
 
@@ -43,7 +43,7 @@ Use this for things like:
 - punctuation
 - plain text runs
 
-Supported pattern building blocks include literals, character classes, dot, and the common repetition operators `*`, `+`, and `?`. The current implementation compiles patterns into an internal NFA-style GPU program during `compile()`. :contentReference[oaicite:3]{index=3}
+Supported pattern building blocks include literals, character classes, dot, and the common repetition operators `*`, `+`, and `?`. The current implementation compiles patterns into an internal NFA-style GPU program during `compile()`.
 
 Examples:
 
