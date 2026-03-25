@@ -172,7 +172,7 @@ function GPUTokenizer() constructor {
         var _nClasses = 0;
 
         // Emit helper
-        var _emit = function(_opArr, _aArr, _bArr, _dArr, _opcode, _ea, _eb, _d) {
+        static __emit = function(_opArr, _aArr, _bArr, _dArr, _opcode, _ea, _eb, _d) {
             var _idx = array_length(_opArr);
             array_push(_opArr, _opcode);
             array_push(_aArr, _ea);
@@ -185,7 +185,7 @@ function GPUTokenizer() constructor {
         var _fragments = [];  // array of { start, outs }
 
         for (var _p = 0; _p < array_length(patternRegexes); _p++) {
-            var _frag = buildPatternNFA(_op, _a, _b, _data, _cls_mem, patternRegexes[_p], _emit);
+            var _frag = buildPatternNFA(_op, _a, _b, _data, _cls_mem, patternRegexes[_p], __emit);
             array_push(_fragments, _frag);
         }
 
@@ -196,13 +196,13 @@ function GPUTokenizer() constructor {
         var _masterStart = 0;
         if (array_length(_fragments) == 0) {
             // No patterns - just a MATCH state (nothing will match)
-            var _matchState = _emit(_op, _a, _b, _data, GPU_TOK_STATE_OP.MATCH, -1, -1, 0);
+            var _matchState = __emit(_op, _a, _b, _data, GPU_TOK_STATE_OP.MATCH, -1, -1, 0);
             _masterStart = _matchState;
             _nStates = array_length(_op);
         } else if (array_length(_fragments) == 1) {
             _masterStart = _fragments[0].start;
 
-            var _matchState = _emit(_op, _a, _b, _data, GPU_TOK_STATE_OP.MATCH, -1, -1, 0);
+            var _matchState = __emit(_op, _a, _b, _data, GPU_TOK_STATE_OP.MATCH, -1, -1, 0);
             _nStates = array_length(_op);
 
             for (var _p = 0; _p < array_length(_fragments); _p++) {
@@ -219,12 +219,12 @@ function GPUTokenizer() constructor {
             // Chain SPLITs: split -> frag0 | (split -> frag1 | (split -> frag2 | ...))
             _masterStart = _fragments[array_length(_fragments) - 1].start;
             for (var _p = array_length(_fragments) - 2; _p >= 0; _p--) {
-                var _splitIdx = _emit(_op, _a, _b, _data, GPU_TOK_STATE_OP.SPLIT, _fragments[_p].start, _masterStart, 0);
+                var _splitIdx = __emit(_op, _a, _b, _data, GPU_TOK_STATE_OP.SPLIT, _fragments[_p].start, _masterStart, 0);
                 _masterStart = _splitIdx;
             }
             _nStates = array_length(_op);
 
-            var _matchState = _emit(_op, _a, _b, _data, GPU_TOK_STATE_OP.MATCH, -1, -1, 0);
+            var _matchState = __emit(_op, _a, _b, _data, GPU_TOK_STATE_OP.MATCH, -1, -1, 0);
             _nStates = array_length(_op);
 
             for (var _p = 0; _p < array_length(_fragments); _p++) {
@@ -551,55 +551,190 @@ function GPUTokenizer() constructor {
 	/// @param   {Function} emit_function : A callback that emits a new state and returns its state index.
 	/// @returns {Struct} A fragment struct in the form `{ start, outs }`, where `start` is the fragment entry state and `outs` is an array of unresolved edge references to patch later.
 	#endregion
-    static buildPatternNFA = function(_op, _a, _b, _data, _cls_mem, _regex, _emit) {
+	static buildPatternNFA = function(_op, _a, _b, _data, _cls_mem, _regex, _emit) {
         var _len = string_length(_regex);
         var _pos = 1;
 
-        // Shunting-yard stacks
-        var _outStack = [];   // postfix output: array of { kind, type, data }
+        var _outStack = [];
         var _opStack = [];
         var _needConcat = false;
 
-        // Constants
-        var K_ATOM = GPU_TOK_REGEX_KIND.ATOM;
-        var K_CONCAT = GPU_TOK_REGEX_KIND.CONCAT;
-        var K_ALT = GPU_TOK_REGEX_KIND.ALT;
-        var K_STAR = GPU_TOK_REGEX_KIND.STAR;
-        var K_PLUS = GPU_TOK_REGEX_KIND.PLUS;
-        var K_QUEST = GPU_TOK_REGEX_KIND.QUEST;
+        // Track group boundaries for counted quantifiers on groups
+        var _groupPosStack = [];        // regex string positions of '('
+        var _groupOutStartStack = [];   // outStack length at each '('
+        var _lastGroupOpenPos = -1;     // regex pos of last closed group's '('
+        var _lastGroupClosePos = -1;    // regex pos of last closed group's ')'
+        var _lastGroupOutStart = -1;    // outStack index where last group started
+		
+		static __prec = function(_kind) {
+	        if (_kind == GPU_TOK_REGEX_KIND.ALT) return 1;
+	        if (_kind == GPU_TOK_REGEX_KIND.CONCAT) return 2;
+	        return 0;
+	    };
 
+	    static __pushOp = function(_outStack, _opStack, _kind, _precFunc) {
+	        while (array_length(_opStack) > 0) {
+	            var _top = _opStack[array_length(_opStack) - 1];
+	            if (_top == GPU_TOK_REGEX_KIND.ATOM) break;
+	            if (_precFunc(_top) < _precFunc(_kind)) break;
+	            array_pop(_opStack);
+	            array_push(_outStack, { kind: _top, type: 0, data: 0 });
+	        }
+	        array_push(_opStack, _kind);
+	    };
+		
         while (_pos <= _len) {
             var _ch = string_char_at(_regex, _pos);
 
-            // Quantifiers
+            // -- Quantifiers (* + ?) --
             if (_ch == "*" || _ch == "+" || _ch == "?") {
-                if (_ch == "*") array_push(_outStack, { kind: K_STAR, type: 0, data: 0 });
-                else if (_ch == "+") array_push(_outStack, { kind: K_PLUS, type: 0, data: 0 });
-                else array_push(_outStack, { kind: K_QUEST, type: 0, data: 0 });
+                if (_ch == "*") array_push(_outStack, { kind: GPU_TOK_REGEX_KIND.STAR, type: 0, data: 0 });
+                else if (_ch == "+") array_push(_outStack, { kind: GPU_TOK_REGEX_KIND.PLUS, type: 0, data: 0 });
+                else array_push(_outStack, { kind: GPU_TOK_REGEX_KIND.QUEST, type: 0, data: 0 });
                 _needConcat = true;
                 _pos++; continue;
             }
 
-            // Push concat if needed
-            if (_needConcat) {
-                // Flush higher-precedence ops
-                while (array_length(_opStack) > 0) {
-                    var _top = _opStack[array_length(_opStack) - 1];
-                    if (_top >= 3) break;  // concat (2) flushes nothing above itself
-                    if (_top < 2) break;
-                    array_pop(_opStack);
-                    array_push(_outStack, { kind: K_CONCAT, type: 0, data: 0 });
+            // -- Counted quantifier {m}, {m,}, {m,n} --
+            if (_ch == "{") {
+                var _savePos = _pos;
+                _pos++;
+                var _minn = 0; var _gotMin = false;
+                while (_pos <= _len && ord(string_char_at(_regex, _pos)) >= 48 && ord(string_char_at(_regex, _pos)) <= 57) {
+                    _minn = _minn * 10 + (ord(string_char_at(_regex, _pos)) - 48);
+                    _gotMin = true; _pos++;
                 }
-                array_push(_opStack, GPU_TOK_REGEX_KIND.CONCAT);  // push CONCAT
+                if (!_gotMin || _pos > _len) {
+                    _pos = _savePos;
+                    if (_needConcat) __pushOp(_outStack, _opStack, GPU_TOK_REGEX_KIND.CONCAT, __prec);
+                    var _s = _emit(_op, _a, _b, _data, GPU_TOK_STATE_OP.CHAR, -1, -1, ord("{"));
+                    array_push(_outStack, { kind: GPU_TOK_REGEX_KIND.ATOM, type: 0, data: { start: _s, outs: [_s * 2] } });
+                    _needConcat = true; _pos++; continue;
+                }
+
+                var _maxx = _minn;
+                if (_pos <= _len && string_char_at(_regex, _pos) == ",") {
+                    _pos++;
+                    _maxx = -1;
+                    var _gotMax = false;
+                    while (_pos <= _len && ord(string_char_at(_regex, _pos)) >= 48 && ord(string_char_at(_regex, _pos)) <= 57) {
+                        if (!_gotMax) { _maxx = 0; _gotMax = true; }
+                        _maxx = _maxx * 10 + (ord(string_char_at(_regex, _pos)) - 48);
+                        _pos++;
+                    }
+                }
+
+                if (_pos > _len || string_char_at(_regex, _pos) != "}") {
+                    _pos = _savePos;
+                    if (_needConcat) __pushOp(_outStack, _opStack, GPU_TOK_REGEX_KIND.CONCAT, __prec);
+                    var _s = _emit(_op, _a, _b, _data, GPU_TOK_STATE_OP.CHAR, -1, -1, ord("{"));
+                    array_push(_outStack, { kind: GPU_TOK_REGEX_KIND.ATOM, type: 0, data: { start: _s, outs: [_s * 2] } });
+                    _needConcat = true; _pos++; continue;
+                }
+                _pos++;
+
+                // Check if preceding element is a simple atom or a group
+                var _lastItem = _outStack[array_length(_outStack) - 1];
+                var _isSimpleAtom = (is_struct(_lastItem) && _lastItem.kind == GPU_TOK_REGEX_KIND.ATOM);
+
+                if (_minn == 0 && _maxx == 0) {
+                    // {0} - discard preceding element
+                    if (_isSimpleAtom) {
+                        array_pop(_outStack);
+                    } else {
+                        // Discard entire group content
+                        array_resize(_outStack, _lastGroupOutStart);
+                    }
+                    var _jmp = _emit(_op, _a, _b, _data, GPU_TOK_STATE_OP.JUMP, -1, -1, 0);
+                    array_push(_outStack, { kind: GPU_TOK_REGEX_KIND.ATOM, type: 0, data: { start: _jmp, outs: [_jmp * 2] } });
+                } else if (_isSimpleAtom) {
+                    // Simple atom - clone with __cloneAtomFragment
+                    var _atomItem = _lastItem;
+                    for (var _rep = 1; _rep < _minn; _rep++) {
+                        var _clonedAtom = __cloneAtomFragment(_op, _a, _b, _data, _cls_mem, _emit, _atomItem);
+                        array_push(_outStack, _clonedAtom);
+                        array_push(_outStack, { kind: GPU_TOK_REGEX_KIND.CONCAT, type: 0, data: 0 });
+                    }
+                    if (_maxx < 0) {
+                        var _clonedAtom = __cloneAtomFragment(_op, _a, _b, _data, _cls_mem, _emit, _atomItem);
+                        array_push(_outStack, _clonedAtom);
+                        array_push(_outStack, { kind: GPU_TOK_REGEX_KIND.STAR, type: 0, data: 0 });
+                        array_push(_outStack, { kind: GPU_TOK_REGEX_KIND.CONCAT, type: 0, data: 0 });
+                    } else if (_maxx > _minn) {
+                        for (var _rep = 0; _rep < _maxx - _minn; _rep++) {
+                            var _clonedAtom = __cloneAtomFragment(_op, _a, _b, _data, _cls_mem, _emit, _atomItem);
+                            array_push(_outStack, _clonedAtom);
+                            array_push(_outStack, { kind: GPU_TOK_REGEX_KIND.QUEST, type: 0, data: 0 });
+                            array_push(_outStack, { kind: GPU_TOK_REGEX_KIND.CONCAT, type: 0, data: 0 });
+                        }
+                    }
+                } else {
+                    // Group - re-parse the group substring for each additional copy
+                    var _groupRegex = string_copy(_regex, _lastGroupOpenPos, _lastGroupClosePos - _lastGroupOpenPos + 1);
+                    for (var _rep = 1; _rep < _minn; _rep++) {
+                        var _frag = buildPatternNFA(_op, _a, _b, _data, _cls_mem, _groupRegex, _emit);
+                        array_push(_outStack, { kind: GPU_TOK_REGEX_KIND.ATOM, type: 0, data: _frag });
+                        array_push(_outStack, { kind: GPU_TOK_REGEX_KIND.CONCAT, type: 0, data: 0 });
+                    }
+                    if (_maxx < 0) {
+                        var _frag = buildPatternNFA(_op, _a, _b, _data, _cls_mem, _groupRegex, _emit);
+                        array_push(_outStack, { kind: GPU_TOK_REGEX_KIND.ATOM, type: 0, data: _frag });
+                        array_push(_outStack, { kind: GPU_TOK_REGEX_KIND.STAR, type: 0, data: 0 });
+                        array_push(_outStack, { kind: GPU_TOK_REGEX_KIND.CONCAT, type: 0, data: 0 });
+                    } else if (_maxx > _minn) {
+                        for (var _rep = 0; _rep < _maxx - _minn; _rep++) {
+                            var _frag = buildPatternNFA(_op, _a, _b, _data, _cls_mem, _groupRegex, _emit);
+                            array_push(_outStack, { kind: GPU_TOK_REGEX_KIND.ATOM, type: 0, data: _frag });
+                            array_push(_outStack, { kind: GPU_TOK_REGEX_KIND.QUEST, type: 0, data: 0 });
+                            array_push(_outStack, { kind: GPU_TOK_REGEX_KIND.CONCAT, type: 0, data: 0 });
+                        }
+                    }
+                }
+
+                _needConcat = true;
+                continue;
             }
 
-            // Character class [...]
+            // -- Grouping ( ) --
+            if (_ch == "(") {
+                if (_needConcat) __pushOp(_outStack, _opStack, GPU_TOK_REGEX_KIND.CONCAT, __prec);
+                array_push(_opStack, GPU_TOK_REGEX_KIND.ATOM);
+                array_push(_groupPosStack, _pos);
+                array_push(_groupOutStartStack, array_length(_outStack));
+                _needConcat = false;
+                _pos++; continue;
+            }
+
+            if (_ch == ")") {
+                while (array_length(_opStack) > 0) {
+                    var _top = _opStack[array_length(_opStack) - 1];
+                    if (_top == GPU_TOK_REGEX_KIND.ATOM) { array_pop(_opStack); break; }
+                    array_pop(_opStack);
+                    array_push(_outStack, { kind: _top, type: 0, data: 0 });
+                }
+                _lastGroupOpenPos = array_pop(_groupPosStack);
+                _lastGroupClosePos = _pos;
+                _lastGroupOutStart = array_pop(_groupOutStartStack);
+                _needConcat = true;
+                _pos++; continue;
+            }
+
+            // -- Alternation | --
+            if (_ch == "|") {
+                __pushOp(_outStack, _opStack, GPU_TOK_REGEX_KIND.ALT, __prec);
+                _needConcat = false;
+                _pos++; continue;
+            }
+
+            // Push concat if needed (for atoms)
+            if (_needConcat) __pushOp(_outStack, _opStack, GPU_TOK_REGEX_KIND.CONCAT, __prec);
+
+            // -- Character class [...] --
             if (_ch == "[") {
                 _pos++;
                 var _negate = false;
                 if (_pos <= _len && string_char_at(_regex, _pos) == "^") { _negate = true; _pos++; }
 
-                // Build 256-byte membership buffer
                 var _clsBuf = buffer_create(256, buffer_fixed, 1);
                 buffer_fill(_clsBuf, 0, buffer_u8, 0, 256);
 
@@ -608,7 +743,16 @@ function GPUTokenizer() constructor {
                     if (_bch == "]") { _pos++; break; }
                     if (_bch == "\\" && _pos + 1 <= _len) {
                         _pos++;
-                        pokeShorthand(_clsBuf, 0, string_char_at(_regex, _pos), 255);
+                        var _ech = string_char_at(_regex, _pos);
+                        if (_ech == "]" || _ech == "[" || _ech == "-" || _ech == "\\") {
+                            buffer_poke(_clsBuf, ord(_ech), buffer_u8, 255);
+                        } else {
+                            pokeShorthand(_clsBuf, 0, _ech, 255);
+                        }
+                        _pos++; continue;
+                    }
+                    if (_bch == "-" && (_pos == 1 || (_pos + 1 <= _len && string_char_at(_regex, _pos+1) == "]"))) {
+                        buffer_poke(_clsBuf, ord("-"), buffer_u8, 255);
                         _pos++; continue;
                     }
                     if (_pos + 2 <= _len && string_char_at(_regex, _pos+1) == "-" && string_char_at(_regex, _pos+2) != "]") {
@@ -622,7 +766,6 @@ function GPUTokenizer() constructor {
                     _pos++;
                 }
 
-                // If negated, invert
                 if (_negate) {
                     for (var _c = 0; _c < 256; _c++) {
                         var _v = buffer_peek(_clsBuf, _c, buffer_u8);
@@ -632,20 +775,18 @@ function GPUTokenizer() constructor {
 
                 var _classId = array_length(_cls_mem);
                 array_push(_cls_mem, _clsBuf);
-
-                var _s = _emit(_op, _a, _b, _data, GPU_TOK_STATE_OP.CLASS, -1, -1, _classId);  // OP_CLASS
-                array_push(_outStack, { kind: K_ATOM, type: 0, data: { start: _s, outs: [_s * 2] } });
+                var _s = _emit(_op, _a, _b, _data, GPU_TOK_STATE_OP.CLASS, -1, -1, _classId);
+                array_push(_outStack, { kind: GPU_TOK_REGEX_KIND.ATOM, type: 0, data: { start: _s, outs: [_s * 2] } });
                 _needConcat = true;
                 continue;
             }
 
-            // Escape
+            // -- Escape --
             if (_ch == "\\" && _pos + 1 <= _len) {
                 _pos++;
                 var _ech = string_char_at(_regex, _pos);
                 _pos++;
 
-                // Check if it's a shorthand class
                 if (_ech == "d" || _ech == "D" || _ech == "w" || _ech == "W" || _ech == "s" || _ech == "S") {
                     var _clsBuf = buffer_create(256, buffer_fixed, 1);
                     buffer_fill(_clsBuf, 0, buffer_u8, 0, 256);
@@ -653,39 +794,39 @@ function GPUTokenizer() constructor {
                     var _classId = array_length(_cls_mem);
                     array_push(_cls_mem, _clsBuf);
                     var _s = _emit(_op, _a, _b, _data, GPU_TOK_STATE_OP.CLASS, -1, -1, _classId);
-                    array_push(_outStack, { kind: K_ATOM, type: 0, data: { start: _s, outs: [_s * 2] } });
+                    array_push(_outStack, { kind: GPU_TOK_REGEX_KIND.ATOM, type: 0, data: { start: _s, outs: [_s * 2] } });
                 } else {
-                    // Literal escape
                     var _byte = ord(_ech);
                     if (_ech == "n") _byte = 0x0A;
                     else if (_ech == "r") _byte = 0x0D;
                     else if (_ech == "t") _byte = 0x09;
-                    var _s = _emit(_op, _a, _b, _data, GPU_TOK_STATE_OP.CHAR, -1, -1, _byte);  // OP_CHAR
-                    array_push(_outStack, { kind: K_ATOM, type: 0, data: { start: _s, outs: [_s * 2] } });
+                    var _s = _emit(_op, _a, _b, _data, GPU_TOK_STATE_OP.CHAR, -1, -1, _byte);
+                    array_push(_outStack, { kind: GPU_TOK_REGEX_KIND.ATOM, type: 0, data: { start: _s, outs: [_s * 2] } });
                 }
                 _needConcat = true;
                 continue;
             }
 
-            // Dot
+            // -- Dot --
             if (_ch == ".") {
-                var _s = _emit(_op, _a, _b, _data, GPU_TOK_STATE_OP.ANY, -1, -1, 0);  // OP_ANY
-                array_push(_outStack, { kind: K_ATOM, type: 0, data: { start: _s, outs: [_s * 2] } });
+                var _s = _emit(_op, _a, _b, _data, GPU_TOK_STATE_OP.ANY, -1, -1, 0);
+                array_push(_outStack, { kind: GPU_TOK_REGEX_KIND.ATOM, type: 0, data: { start: _s, outs: [_s * 2] } });
                 _needConcat = true;
                 _pos++; continue;
             }
 
-            // Literal char
-            var _s = _emit(_op, _a, _b, _data, GPU_TOK_STATE_OP.CHAR, -1, -1, ord(_ch));  // OP_CHAR
-            array_push(_outStack, { kind: K_ATOM, type: 0, data: { start: _s, outs: [_s * 2] } });
+            // -- Literal char --
+            var _s = _emit(_op, _a, _b, _data, GPU_TOK_STATE_OP.CHAR, -1, -1, ord(_ch));
+            array_push(_outStack, { kind: GPU_TOK_REGEX_KIND.ATOM, type: 0, data: { start: _s, outs: [_s * 2] } });
             _needConcat = true;
             _pos++;
         }
 
         // Flush remaining ops
         while (array_length(_opStack) > 0) {
-            array_pop(_opStack);
-            array_push(_outStack, { kind: K_CONCAT, type: 0, data: 0 });
+            var _top = array_pop(_opStack);
+            if (_top == GPU_TOK_REGEX_KIND.ATOM) continue;
+            array_push(_outStack, { kind: _top, type: 0, data: 0 });
         }
 
         // -- Evaluate postfix into NFA fragments --
@@ -694,15 +835,14 @@ function GPUTokenizer() constructor {
         for (var _i = 0; _i < array_length(_outStack); _i++) {
             var _item = _outStack[_i];
 
-            if (_item.kind == K_ATOM) {
+            if (_item.kind == GPU_TOK_REGEX_KIND.ATOM) {
                 array_push(_fragStack, _item.data);
                 continue;
             }
 
-            if (_item.kind == K_CONCAT) {
+            if (_item.kind == GPU_TOK_REGEX_KIND.CONCAT) {
                 var _right = array_pop(_fragStack);
                 var _left = array_pop(_fragStack);
-                // Patch left outs -> right start
                 for (var _o = 0; _o < array_length(_left.outs); _o++) {
                     var _ref = _left.outs[_o];
                     var _si = _ref div 2;
@@ -714,7 +854,18 @@ function GPUTokenizer() constructor {
                 continue;
             }
 
-            if (_item.kind == K_STAR) {
+            if (_item.kind == GPU_TOK_REGEX_KIND.ALT) {
+                var _right = array_pop(_fragStack);
+                var _left = array_pop(_fragStack);
+                var _split = _emit(_op, _a, _b, _data, GPU_TOK_STATE_OP.SPLIT, _left.start, _right.start, 0);
+                var _outs = [];
+                for (var _o = 0; _o < array_length(_left.outs); _o++) array_push(_outs, _left.outs[_o]);
+                for (var _o = 0; _o < array_length(_right.outs); _o++) array_push(_outs, _right.outs[_o]);
+                array_push(_fragStack, { start: _split, outs: _outs });
+                continue;
+            }
+
+            if (_item.kind == GPU_TOK_REGEX_KIND.STAR) {
                 var _sub = array_pop(_fragStack);
                 var _split = _emit(_op, _a, _b, _data, GPU_TOK_STATE_OP.SPLIT, _sub.start, -1, 0);
                 for (var _o = 0; _o < array_length(_sub.outs); _o++) {
@@ -728,7 +879,7 @@ function GPUTokenizer() constructor {
                 continue;
             }
 
-            if (_item.kind == K_PLUS) {
+            if (_item.kind == GPU_TOK_REGEX_KIND.PLUS) {
                 var _sub = array_pop(_fragStack);
                 var _split = _emit(_op, _a, _b, _data, GPU_TOK_STATE_OP.SPLIT, _sub.start, -1, 0);
                 for (var _o = 0; _o < array_length(_sub.outs); _o++) {
@@ -742,7 +893,7 @@ function GPUTokenizer() constructor {
                 continue;
             }
 
-            if (_item.kind == K_QUEST) {
+            if (_item.kind == GPU_TOK_REGEX_KIND.QUEST) {
                 var _sub = array_pop(_fragStack);
                 var _split = _emit(_op, _a, _b, _data, GPU_TOK_STATE_OP.SPLIT, _sub.start, -1, 0);
                 var _outs = [];
@@ -756,8 +907,35 @@ function GPUTokenizer() constructor {
 
         return array_pop(_fragStack);
     };
-
-
+	
+	#region jsDoc
+	/// @func    __cloneAtomFragment(_op, _a, _b, _data, _cls_mem, _emit, _atomItem)
+	/// @desc    Clones an atom fragment by emitting a fresh copy of its start state and returning a new atom item that owns the new fragment.
+	/// @desc    If the atom item does not contain a valid fragment struct, the original item is returned unchanged.
+	/// @self    GPUTokenizer
+	/// @param   {Array<Real>} op_array : The emitted NFA state opcode array.
+	/// @param   {Array<Real>} edge_a_array : The emitted NFA primary edge array.
+	/// @param   {Array<Real>} edge_b_array : The emitted NFA secondary edge array.
+	/// @param   {Array<Real>} data_array : The emitted NFA per-state data array.
+	/// @param   {Array<Buffer>} class_membership_array : The emitted class membership table array.
+	/// @param   {Function} emit_function : Callback used to emit a new NFA state and return its index.
+	/// @param   {Struct} atom_item : The atom item to clone.
+	/// @returns {Struct} A new atom item with a freshly emitted fragment, or the original item if it does not contain cloneable fragment data.
+	#endregion
+	static __cloneAtomFragment = function(_op, _a, _b, _data, _cls_mem, _emit, _atomItem) {
+		var _origData = _atomItem.data;
+		if (!is_struct(_origData)) return _atomItem;
+		
+		// Single-state atom (CHAR, CLASS, ANY) - most common case
+		var _origStart = _origData.start;
+		var _origOp = _op[_origStart];
+		var _origD = _data[_origStart];
+		
+		var _s = _emit(_op, _a, _b, _data, _origOp, -1, -1, _origD);
+		return { kind: GPU_TOK_REGEX_KIND.ATOM, type: 0, data: { start: _s, outs: [_s * 2] } };
+	};
+	
+	
     // =============== HELPERS ===============
 
 	#region jsDoc

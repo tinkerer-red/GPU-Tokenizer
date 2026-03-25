@@ -1,4 +1,4 @@
-/// @desc Create Event - obj_gpu_tokenizer_test
+show_debug_overlay(true)
 
 // Helper: tokenize and return array of strings
 function gpu_tok_to_array(_tokenizer, _input) {
@@ -783,6 +783,813 @@ call_later(_frame++, time_source_units_frames, function() {
     );
 });
 
+// ===========================================
+//  SECTION: REGEX FEATURES
+// ===========================================
+
+call_later(_frame++, time_source_units_frames, function() {
+    show_debug_message("\n-- REGEX: Character Classes --");
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Class [abc]", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'[abc]+');
+        _t.addDelimiter(@' ');
+        _t.setUnmatchedRule(GPU_TOKEN.ISOLATE);
+        _t.compile();
+        return _t;
+    },
+    "abcba dx",
+    ["abcba", "d", "x"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Range [a-z]", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'[a-z]+');
+        _t.addDelimiter(@' ');
+        _t.setUnmatchedRule(GPU_TOKEN.ISOLATE);
+        _t.compile();
+        return _t;
+    },
+    "abc XYZ",
+    ["abc", "X", "Y", "Z"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Multi-range [a-zA-Z0-9]", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'[a-zA-Z0-9]+');
+        _t.addDelimiter(@' ');
+        _t.setUnmatchedRule(GPU_TOKEN.ISOLATE);
+        _t.compile();
+        return _t;
+    },
+    "Hello123 !?",
+    ["Hello123", "!", "?"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Negated class [^0-9]", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'[^0-9]+');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "abc 123 def",
+    ["abc", "def"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Negated class [^,] for CSV", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'[^,]+');
+        _t.addDelimiter(",");
+        _t.compile();
+        return _t;
+    },
+    "one,two,three",
+    ["one", "two", "three"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Escaped ] inside class [\\]]", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'[\]]+');
+        _t.addDelimiter(@' ');
+        _t.setUnmatchedRule(GPU_TOKEN.ISOLATE);
+        _t.compile();
+        return _t;
+    },
+    "]] a",
+    ["]]", "a"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Escaped \\\\ inside class", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'[\\]+');
+        _t.addDelimiter(@' ');
+        _t.setUnmatchedRule(GPU_TOKEN.ISOLATE);
+        _t.compile();
+        return _t;
+    },
+    "\\\\ a",
+    ["\\\\", "a"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Literal hyphen [-abc]", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'[-abc]+');
+        _t.addDelimiter(@' ');
+        _t.setUnmatchedRule(GPU_TOKEN.ISOLATE);
+        _t.compile();
+        return _t;
+    },
+    "a-b x",
+    ["a-b", "x"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Escaped hyphen [a\\-z]", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'[a\-z]+');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "a-z",
+    ["a-z"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Hex range [a-fA-F0-9]", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'[a-fA-F0-9]+');
+        _t.addDelimiter(@' ');
+        _t.setUnmatchedRule(GPU_TOKEN.ISOLATE);
+        _t.compile();
+        return _t;
+    },
+    "DeadBeef 0x FF GG",
+    ["DeadBeef", "0", "FF", "GG"]
+    );
+});
+
+// -- Shorthand Classes --
+
+call_later(_frame++, time_source_units_frames, function() {
+    show_debug_message("\n-- REGEX: Shorthand Classes --");
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("\\d+ digits", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\d+');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "123 456",
+    ["123", "456"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("\\D+ non-digits", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\D+');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "abc !?",
+    ["abc", "!?"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("\\w+ word chars", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w+');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "hello_World FOO",
+    ["hello_World", "FOO"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("\\W+ non-word", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\W+');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "!? @#",
+    ["!?", "@#"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("\\s+ whitespace", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\s+');
+        _t.addPattern(@'\S+');
+        _t.compile();
+        return _t;
+    },
+    "a b\tc",
+    ["a", " ", "b", "\t", "c"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("\\S+ non-whitespace", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\S+');
+        _t.addDelimiter(@' \t\n');
+        _t.compile();
+        return _t;
+    },
+    "abc\tdef\nghi",
+    ["abc", "def", "ghi"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("\\d inside class [\\d]", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'[\da-f]+');
+        _t.addDelimiter(@' ');
+        _t.setUnmatchedRule(GPU_TOKEN.ISOLATE);
+        _t.compile();
+        return _t;
+    },
+    "0f9a GH",
+    ["0f9a", "G", "H"]
+    );
+});
+
+// -- Escape Sequences --
+
+call_later(_frame++, time_source_units_frames, function() {
+    show_debug_message("\n-- REGEX: Escape Sequences --");
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Escaped dot \\.", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\d+\.\d+');
+        _t.addPattern(@'\d+');
+        _t.addDelimiter(@' ');
+        _t.setUnmatchedRule(GPU_TOKEN.ISOLATE);
+        _t.compile();
+        return _t;
+    },
+    "3.14 42",
+    ["3.14", "42"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Escaped star \\*", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\*+');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "*** **",
+    ["***", "**"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Escaped plus \\+", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\++');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "+++ ++",
+    ["+++", "++"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Escaped question \\?", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\?+');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "??? ?",
+    ["???", "?"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Escaped pipe \\|", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\|+');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "||| ||",
+    ["|||", "||"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Escaped parens \\( \\)", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\(\)');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "()",
+    ["()"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Escaped braces \\{ \\}", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\{\}');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "{}",
+    ["{}"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Escaped backslash \\\\", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\\+');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "\\\\ \\",
+    ["\\\\", "\\"]
+    );
+});
+
+// -- Dot --
+
+call_later(_frame++, time_source_units_frames, function() {
+    show_debug_message("\n-- REGEX: Dot --");
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Dot matches any non-newline", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'.+');
+        _t.addDelimiter(@'\n');
+        _t.compile();
+        return _t;
+    },
+    "abc\ndef",
+    ["abc", "def"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Dot single char", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'.');
+        _t.addIgnore(@'\n');
+        _t.compile();
+        return _t;
+    },
+    "ab\ncd",
+    ["a", "b", "c", "d"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("a.c pattern", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'a.c');
+        _t.addDelimiter(@' ');
+        _t.setUnmatchedRule(GPU_TOKEN.ISOLATE);
+        _t.compile();
+        return _t;
+    },
+    "abc a1c a c",
+    ["abc", "a1c", "a c"]
+    );
+});
+
+// -- Quantifiers --
+
+call_later(_frame++, time_source_units_frames, function() {
+    show_debug_message("\n-- REGEX: Quantifiers * + ? --");
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Star: ab*c matches ac abbc", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'ab*c');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "ac abbc abbbc",
+    ["ac", "abbc", "abbbc"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Plus: ab+c needs at least one b", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'ab+c');
+        _t.addDelimiter(@' ');
+        _t.setUnmatchedRule(GPU_TOKEN.ISOLATE);
+        _t.compile();
+        return _t;
+    },
+    "abc abbc ac",
+    ["abc", "abbc", "a", "c"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Question: colou?r matches color and colour", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'colou?r');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "color colour",
+    ["color", "colour"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Plus on class: [a-z]+", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'[a-z]+');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "abc xyz",
+    ["abc", "xyz"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Star on class: [0-9]*x", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'[0-9]*x');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "x 123x 0x",
+    ["x", "123x", "0x"]
+    );
+});
+
+// -- Counted Quantifiers --
+
+call_later(_frame++, time_source_units_frames, function() {
+    show_debug_message("\n-- REGEX: Counted Quantifiers {m,n} --");
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("{3} exactly three", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\d{3}');
+        _t.addDelimiter(@' ');
+        _t.setUnmatchedRule(GPU_TOKEN.ISOLATE);
+        _t.compile();
+        return _t;
+    },
+    "123 12 1234",
+    ["123", "1", "2", "123", "4"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("{2,4} between two and four", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\d{2,4}');
+        _t.addDelimiter(@' ');
+        _t.setUnmatchedRule(GPU_TOKEN.ISOLATE);
+        _t.compile();
+        return _t;
+    },
+    "1 12 123 1234 12345",
+    ["1", "12", "123", "1234", "1234", "5"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("{2,} two or more", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\d{2,}');
+        _t.addDelimiter(@' ');
+        _t.setUnmatchedRule(GPU_TOKEN.ISOLATE);
+        _t.compile();
+        return _t;
+    },
+    "1 12 123 12345",
+    ["1", "12", "123", "12345"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("{6} hex color", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'[a-fA-F0-9]{6}');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "FF00AA DEADBE",
+    ["FF00AA", "DEADBE"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Malformed { treated as literal", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w+');
+        _t.addDelimiter(@' ');
+        _t.setUnmatchedRule(GPU_TOKEN.ISOLATE);
+        _t.compile();
+        return _t;
+    },
+    "a{b",
+    ["a", "{", "b"]
+    );
+});
+
+// -- Grouping --
+
+call_later(_frame++, time_source_units_frames, function() {
+    show_debug_message("\n-- REGEX: Grouping ( ) --");
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("(ab)+ repeating group", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'(ab)+');
+        _t.addDelimiter(@' ');
+        _t.setUnmatchedRule(GPU_TOKEN.ISOLATE);
+        _t.compile();
+        return _t;
+    },
+    "ab abab ababab a",
+    ["ab", "abab", "ababab", "a"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("(ab)* zero or more groups", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'x(ab)*y');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "xy xaby xababy",
+    ["xy", "xaby", "xababy"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("(ab)? optional group", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'x(ab)?y');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "xy xaby",
+    ["xy", "xaby"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Nested groups ((ab)c)+", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'((ab)c)+');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "abc abcabc",
+    ["abc", "abcabc"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Group with quantified content (a+b)+", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'(a+b)+');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "ab aab aabaab",
+    ["ab", "aab", "aabaab"]
+    );
+});
+
+// -- Alternation --
+
+call_later(_frame++, time_source_units_frames, function() {
+    show_debug_message("\n-- REGEX: Alternation | --");
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Simple alternation foo|bar", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'foo|bar');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "foo bar baz",
+    ["foo", "bar"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Three-way alternation cat|dog|fish", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'cat|dog|fish');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "cat fish dog bird",
+    ["cat", "fish", "dog"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Alternation with grouping (ab|cd)ef", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'(ab|cd)ef');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "abef cdef abcd",
+    ["abef", "cdef"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Alternation greedy longest: \\d+|\\w+", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\d+|\w+');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "hello 42 abc123",
+    ["hello", "42", "abc123"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Alternation inside quantifier (a|bb)+", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'(a|bb)+');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "a bb abba aabb",
+    ["a", "bb", "abba", "aabb"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Alternation precedence: ab|cd is (ab)|(cd)", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'ab|cd');
+        _t.addDelimiter(@' ');
+        _t.setUnmatchedRule(GPU_TOKEN.ISOLATE);
+        _t.compile();
+        return _t;
+    },
+    "ab cd ad",
+    ["ab", "cd", "a", "d"]
+    );
+});
+
+// -- Combined Features --
+
+call_later(_frame++, time_source_units_frames, function() {
+    show_debug_message("\n-- REGEX: Combined Features --");
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("IP-like (\\d{1,3}\\.){3}\\d{1,3}", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'(\d{1,3}\.){3}\d{1,3}');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "192.168.1.1",
+    ["192.168.1.1"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Semver \\d+\\.\\d+\\.\\d+", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\d+\.\d+\.\d+');
+        _t.addPattern(@'\w+');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "version 1.2.3 done",
+    ["version", "1.2.3", "done"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Keyword alternation (if|else|while|for|return)", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'(if|else|while|for|return)');
+        _t.addPattern(@'\w+');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "if x else y while z",
+    ["if", "x", "else", "y", "while", "z"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Hex literal 0x[a-fA-F0-9]+", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'0x[a-fA-F0-9]+');
+        _t.addPattern(@'\d+');
+        _t.addPattern(@'\w+');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "0xFF 0x1A2B 42 hello",
+    ["0xFF", "0x1A2B", "42", "hello"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("BBCode tag \\[[a-z]+\\]", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\[[a-z]+\]');
+        _t.addPattern(@'\[/[a-z]+\]');
+        _t.addPattern(@'[^\[\]]+');
+        _t.addDelimiter(@'\n');
+        _t.compile();
+        return _t;
+    },
+    "[b]hello[/b]",
+    ["[b]", "hello", "[/b]"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Optional prefix: (0x)?[a-fA-F0-9]+", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'(0x)?[a-fA-F0-9]+');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "0xFF FF 0x00",
+    ["0xFF", "FF", "0x00"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Repeated group with quantifier (\\d{2}:){2}\\d{2}", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'(\d{2}:){2}\d{2}');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "12:34:56",
+    ["12:34:56"]
+    );
+});
 
 // ===========================================
 //  DONE
