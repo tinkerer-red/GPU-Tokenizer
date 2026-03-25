@@ -10,8 +10,11 @@ varying vec2 v_vTexcoord;
 #define GPU_TOK_TYPE_PATTERN 3.0
 
 #define GPU_TOK_MAX_CTX_SEQUENCE_BYTES 1024
-#define GPU_TOK_MAX_MATCH_OUTER 65535
 
+// Max input file size in megabytes. Total iterations: MB × 1024 × 1024.
+// Each loop level must stay under 65535 for HLSL transpiler, so max value is 65535.
+// Practical limit is GPU surface dimensions (~128 MB at 8192x8192).
+#define GPU_TOK_MAX_INPUT_MB 1
 
 // gm_BaseTexture = input bytes
 uniform sampler2D u_texMatch;       // Match length texture from pass 1
@@ -149,187 +152,180 @@ void main() {
         int nfaRemaining = 0;    // bytes remaining in current NFA token span
 
         float fi = 0.0;
-        for (int outer = 0; outer < GPU_TOK_MAX_MATCH_OUTER; outer++) {
+        // Triple loop: GPU_TOK_MAX_INPUT_MB × 1024 × 1024 bytes max input
+        for (int outer = 0; outer < GPU_TOK_MAX_INPUT_MB; outer++) {
             if (found || fi >= u_totalBytes) break;
-            for (int inner = 0; inner < 256; inner++) {
+            for (int middle = 0; middle < 1024; middle++) {
                 if (found || fi >= u_totalBytes) break;
-                if (skipBytes > 0) { skipBytes = skipBytes - 1; fi += 1.0; continue; }
+                for (int inner = 0; inner < 1024; inner++) {
+                    if (found || fi >= u_totalBytes) break;
+                    if (skipBytes > 0) { skipBytes = skipBytes - 1; fi += 1.0; continue; }
 
-                float curByte = fetchByte(fi);
-                float curByteVal = floor(curByte * 255.0 + 0.5);
+                    float curByte = fetchByte(fi);
+                    float curByteVal = floor(curByte * 255.0 + 0.5);
 
-                // === CONTEXT MODE ===
-                if (inContext) {
-                    if (prevWasEsc) {
-                        prevWasEsc = false;
+                    // === CONTEXT MODE ===
+                    if (inContext) {
+                        if (prevWasEsc) {
+                            prevWasEsc = false;
+                            if (outPos == myOutIdx) { outByte = curByte; found = true; break; }
+                            outPos += 1.0; fi += 1.0; continue;
+                        }
+                        if (ctxEscLen > 0) {
+                            float dummy; int escLen;
+                            bool escHit = matchCtxSequence(ctxEscOffset, fi, dummy, escLen);
+                            if (escHit && escLen == ctxEscLen) {
+                                prevWasEsc = true;
+                                if (ctxKeepEscape) {
+                                    float fj = 0.0;
+                                    for (int eb = 0; eb < GPU_TOK_MAX_CTX_SEQUENCE_BYTES; eb++) {
+                                        if (eb >= escLen) break;
+                                        if (outPos == myOutIdx) { outByte = fetchByte(fi + fj); found = true; }
+                                        if (found) break;
+                                        outPos += 1.0; fj += 1.0;
+                                    }
+                                    if (found) break;
+                                }
+                                skipBytes = escLen - 1; fi += 1.0; continue;
+                            }
+                        }
+                        float dummy2; int closeLen;
+                        bool closeHit = matchCtxSequence(ctxCloseOffset, fi, dummy2, closeLen);
+                        if (closeHit && closeLen == ctxCloseLen) {
+                            if (ctxKeepClose) {
+                                float fj = 0.0;
+                                for (int cb = 0; cb < GPU_TOK_MAX_CTX_SEQUENCE_BYTES; cb++) {
+                                    if (cb >= closeLen) break;
+                                    if (outPos == myOutIdx) { outByte = fetchByte(fi + fj); found = true; }
+                                    if (found) break;
+                                    outPos += 1.0; fj += 1.0;
+                                }
+                                if (found) break;
+                            }
+                            skipBytes = closeLen - 1;
+                            if (outPos == myOutIdx) { outByte = 0.0; found = true; break; }
+                            outPos += 1.0; inContext = false;
+                            fi += 1.0; continue;
+                        }
                         if (outPos == myOutIdx) { outByte = curByte; found = true; break; }
                         outPos += 1.0; fi += 1.0; continue;
                     }
-                    if (ctxEscLen > 0) {
-                        float dummy; int escLen;
-                        bool escHit = matchCtxSequence(ctxEscOffset, fi, dummy, escLen);
-                        if (escHit && escLen == ctxEscLen) {
-                            prevWasEsc = true;
-                            if (ctxKeepEscape) {
-                                float fj = 0.0;
-                                for (int eb = 0; eb < GPU_TOK_MAX_CTX_SEQUENCE_BYTES; eb++) {
-                                    if (eb >= escLen) break;
-                                    if (outPos == myOutIdx) { outByte = fetchByte(fi + fj); found = true; }
+
+                    // === NORMAL MODE ===
+
+                    float ruleIdx = getCtxStart(curByteVal);
+                    if (ruleIdx > 0.0) {
+                        bool ctxMatched = false;
+                        for (int r = 0; r < GPU_TOK_MAX_CTX_SEQUENCE_BYTES; r++) {
+                            if (ruleIdx == 0.0) break;
+                            vec4 idx = getCtxIndex(ruleIdx);
+                            float dataOff = floor(idx.r * 255.0 + 0.5) + floor(idx.g * 255.0 + 0.5) * 256.0;
+                            float nextRule = floor(idx.b * 255.0 + 0.5);
+                            float flags = floor(idx.a * 255.0 + 0.5);
+                            float afterOpen; int openLen;
+                            bool openHit = matchCtxSequence(dataOff, fi, afterOpen, openLen);
+                            if (openHit) {
+                                bool keepOpen = (mod(flags, 2.0) >= 0.5);
+                                bool keepClose = (mod(floor(flags / 2.0), 2.0) >= 0.5);
+                                bool keepEsc = (mod(floor(flags / 4.0), 2.0) >= 0.5);
+                                if (nfaRemaining > 0 || inUnmatched) {
+                                    if (outPos == myOutIdx) { outByte = 0.0; found = true; }
                                     if (found) break;
-                                    outPos += 1.0; fj += 1.0;
+                                    outPos += 1.0;
+                                    nfaRemaining = 0;
+                                    inUnmatched = false;
                                 }
-                                if (found) break;
+                                if (keepOpen) {
+                                    float fj = 0.0;
+                                    for (int ob = 0; ob < GPU_TOK_MAX_CTX_SEQUENCE_BYTES; ob++) {
+                                        if (ob >= openLen) break;
+                                        if (outPos == myOutIdx) { outByte = fetchByte(fi + fj); found = true; }
+                                        if (found) break;
+                                        outPos += 1.0; fj += 1.0;
+                                    }
+                                    if (found) break;
+                                }
+                                skipBytes = openLen - 1;
+                                ctxCloseOffset = afterOpen;
+                                ctxCloseLen = 0;
+                                float fm = 0.0;
+                                for (int m = 0; m < GPU_TOK_MAX_CTX_SEQUENCE_BYTES; m++) {
+                                    if (floor(fetchCtxByte(afterOpen + fm) * 255.0 + 0.5) == 0.0) {
+                                        ctxCloseLen = m; ctxEscOffset = afterOpen + fm + 1.0; break;
+                                    }
+                                    fm += 1.0;
+                                }
+                                ctxEscLen = 0; fm = 0.0;
+                                for (int m = 0; m < GPU_TOK_MAX_CTX_SEQUENCE_BYTES; m++) {
+                                    if (floor(fetchCtxByte(ctxEscOffset + fm) * 255.0 + 0.5) == 0.0) {
+                                        ctxEscLen = m; break;
+                                    }
+                                    fm += 1.0;
+                                }
+                                inContext = true; prevWasEsc = false;
+                                ctxKeepClose = keepClose; ctxKeepEscape = keepEsc;
+                                ctxMatched = true; break;
                             }
-                            skipBytes = escLen - 1; fi += 1.0; continue;
+                            ruleIdx = nextRule;
                         }
+                        if (found) break;
+                        if (ctxMatched) { fi += 1.0; continue; }
                     }
-                    float dummy2; int closeLen;
-                    bool closeHit = matchCtxSequence(ctxCloseOffset, fi, dummy2, closeLen);
-                    if (closeHit && closeLen == ctxCloseLen) {
-                        if (ctxKeepClose) {
-                            float fj = 0.0;
-                            for (int cb = 0; cb < GPU_TOK_MAX_CTX_SEQUENCE_BYTES; cb++) {
-                                if (cb >= closeLen) break;
-                                if (outPos == myOutIdx) { outByte = fetchByte(fi + fj); found = true; }
-                                if (found) break;
-                                outPos += 1.0; fj += 1.0;
-                            }
-                            if (found) break;
+
+                    if (nfaRemaining > 0) {
+                        if (outPos == myOutIdx) { outByte = curByte; found = true; break; }
+                        outPos += 1.0;
+                        nfaRemaining -= 1;
+                        if (nfaRemaining == 0) {
+                            if (outPos == myOutIdx) { outByte = 0.0; found = true; break; }
+                            outPos += 1.0;
                         }
-                        skipBytes = closeLen - 1;
+                        fi += 1.0; continue;
+                    }
+
+                    float curType = getType(curByteVal);
+                    if (curType == GPU_TOK_TYPE_IGNORE) { fi += 1.0; continue; }
+                    if (curType == GPU_TOK_TYPE_DELIMITER) {
+                        if (inUnmatched) {
+                            if (outPos == myOutIdx) { outByte = 0.0; found = true; break; }
+                            outPos += 1.0; inUnmatched = false;
+                        }
+                        fi += 1.0; continue;
+                    }
+
+                    float matchLen = getMatchLen(fi);
+                    if (matchLen > 0.0) {
+                        if (inUnmatched) {
+                            if (outPos == myOutIdx) { outByte = 0.0; found = true; break; }
+                            outPos += 1.0; inUnmatched = false;
+                        }
+                        if (outPos == myOutIdx) { outByte = curByte; found = true; break; }
+                        outPos += 1.0;
+                        nfaRemaining = int(matchLen) - 1;
+                        if (nfaRemaining == 0) {
+                            if (outPos == myOutIdx) { outByte = 0.0; found = true; break; }
+                            outPos += 1.0;
+                        }
+                        fi += 1.0; continue;
+                    }
+
+                    if (u_unmatchedMode == GPU_TOKEN_OMIT) { fi += 1.0; continue; }
+                    if (u_unmatchedMode == GPU_TOKEN_ISOLATE) {
+                        if (inUnmatched) {
+                            if (outPos == myOutIdx) { outByte = 0.0; found = true; break; }
+                            outPos += 1.0; inUnmatched = false;
+                        }
+                        if (outPos == myOutIdx) { outByte = curByte; found = true; break; }
+                        outPos += 1.0;
                         if (outPos == myOutIdx) { outByte = 0.0; found = true; break; }
-                        outPos += 1.0; inContext = false;
+                        outPos += 1.0;
                         fi += 1.0; continue;
                     }
                     if (outPos == myOutIdx) { outByte = curByte; found = true; break; }
-                    outPos += 1.0; fi += 1.0; continue;
-                }
-
-                // === NORMAL MODE ===
-
-                // Context openers are checked at EVERY position,
-                // even within an NFA token span. Context takes priority.
-                float ruleIdx = getCtxStart(curByteVal);
-                if (ruleIdx > 0.0) {
-                    bool ctxMatched = false;
-                    for (int r = 0; r < GPU_TOK_MAX_CTX_SEQUENCE_BYTES; r++) {
-                        if (ruleIdx == 0.0) break;
-                        vec4 idx = getCtxIndex(ruleIdx);
-                        float dataOff = floor(idx.r * 255.0 + 0.5) + floor(idx.g * 255.0 + 0.5) * 256.0;
-                        float nextRule = floor(idx.b * 255.0 + 0.5);
-                        float flags = floor(idx.a * 255.0 + 0.5);
-                        float afterOpen; int openLen;
-                        bool openHit = matchCtxSequence(dataOff, fi, afterOpen, openLen);
-                        if (openHit) {
-                            bool keepOpen = (mod(flags, 2.0) >= 0.5);
-                            bool keepClose = (mod(floor(flags / 2.0), 2.0) >= 0.5);
-                            bool keepEsc = (mod(floor(flags / 4.0), 2.0) >= 0.5);
-                            // If mid-NFA token or mid-unmatched, terminate it
-                            if (nfaRemaining > 0 || inUnmatched) {
-                                if (outPos == myOutIdx) { outByte = 0.0; found = true; }
-                                if (found) break;
-                                outPos += 1.0;
-                                nfaRemaining = 0;
-                                inUnmatched = false;
-                            }
-                            if (keepOpen) {
-                                float fj = 0.0;
-                                for (int ob = 0; ob < GPU_TOK_MAX_CTX_SEQUENCE_BYTES; ob++) {
-                                    if (ob >= openLen) break;
-                                    if (outPos == myOutIdx) { outByte = fetchByte(fi + fj); found = true; }
-                                    if (found) break;
-                                    outPos += 1.0; fj += 1.0;
-                                }
-                                if (found) break;
-                            }
-                            skipBytes = openLen - 1;
-                            ctxCloseOffset = afterOpen;
-                            ctxCloseLen = 0;
-                            float fm = 0.0;
-                            for (int m = 0; m < GPU_TOK_MAX_CTX_SEQUENCE_BYTES; m++) {
-                                if (floor(fetchCtxByte(afterOpen + fm) * 255.0 + 0.5) == 0.0) {
-                                    ctxCloseLen = m; ctxEscOffset = afterOpen + fm + 1.0; break;
-                                }
-                                fm += 1.0;
-                            }
-                            ctxEscLen = 0; fm = 0.0;
-                            for (int m = 0; m < GPU_TOK_MAX_CTX_SEQUENCE_BYTES; m++) {
-                                if (floor(fetchCtxByte(ctxEscOffset + fm) * 255.0 + 0.5) == 0.0) {
-                                    ctxEscLen = m; break;
-                                }
-                                fm += 1.0;
-                            }
-                            inContext = true; prevWasEsc = false;
-                            ctxKeepClose = keepClose; ctxKeepEscape = keepEsc;
-                            ctxMatched = true; break;
-                        }
-                        ruleIdx = nextRule;
-                    }
-                    if (found) break;
-                    if (ctxMatched) { fi += 1.0; continue; }
-                }
-
-                // If in NFA token span, emit this byte
-                if (nfaRemaining > 0) {
-                    if (outPos == myOutIdx) { outByte = curByte; found = true; break; }
                     outPos += 1.0;
-                    nfaRemaining -= 1;
-                    if (nfaRemaining == 0) {
-                        if (outPos == myOutIdx) { outByte = 0.0; found = true; break; }
-                        outPos += 1.0;
-                    }
-                    fi += 1.0; continue;
+                    inUnmatched = true;
+                    fi += 1.0;
                 }
-
-                // Type check
-                float curType = getType(curByteVal);
-                if (curType == GPU_TOK_TYPE_IGNORE) { fi += 1.0; continue; }  // IGNORE
-                if (curType == GPU_TOK_TYPE_DELIMITER) {  // DELIMITER
-                    if (inUnmatched) {
-                        if (outPos == myOutIdx) { outByte = 0.0; found = true; break; }
-                        outPos += 1.0; inUnmatched = false;
-                    }
-                    fi += 1.0; continue;
-                }
-
-                // Check NFA match length at this position
-                float matchLen = getMatchLen(fi);
-                if (matchLen > 0.0) {
-                    // End unmatched run if any
-                    if (inUnmatched) {
-                        if (outPos == myOutIdx) { outByte = 0.0; found = true; break; }
-                        outPos += 1.0; inUnmatched = false;
-                    }
-                    // Emit first byte of NFA match
-                    if (outPos == myOutIdx) { outByte = curByte; found = true; break; }
-                    outPos += 1.0;
-                    nfaRemaining = int(matchLen) - 1;
-                    if (nfaRemaining == 0) {
-                        // Single-byte match, emit null immediately
-                        if (outPos == myOutIdx) { outByte = 0.0; found = true; break; }
-                        outPos += 1.0;
-                    }
-                    fi += 1.0; continue;
-                }
-
-                // No match - unmatched byte
-                if (u_unmatchedMode == GPU_TOKEN_OMIT) { fi += 1.0; continue; }  // OMIT
-                if (u_unmatchedMode == GPU_TOKEN_ISOLATE) {  // ISOLATE
-                    if (inUnmatched) {
-                        if (outPos == myOutIdx) { outByte = 0.0; found = true; break; }
-                        outPos += 1.0; inUnmatched = false;
-                    }
-                    if (outPos == myOutIdx) { outByte = curByte; found = true; break; }
-                    outPos += 1.0;
-                    if (outPos == myOutIdx) { outByte = 0.0; found = true; break; }
-                    outPos += 1.0;
-                    fi += 1.0; continue;
-                }
-                // CONCATENATE
-                if (outPos == myOutIdx) { outByte = curByte; found = true; break; }
-                outPos += 1.0;
-                inUnmatched = true;
-                fi += 1.0;
             }
         }
 

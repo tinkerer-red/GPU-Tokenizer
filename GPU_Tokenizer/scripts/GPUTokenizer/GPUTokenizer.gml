@@ -12,7 +12,6 @@ function GPUTokenizer() constructor {
     surfOutput   = -1;
     surfMatch    = -1;   // match length texture (pass 1 output)
     surfProgram  = -1;   // NFA program texture
-    surfLookup   = -1;   // not used - kept for API compat notes
     srcTexW = 0;  srcTexH = 0;
     outTexW = 0;  outTexH = 0;
     matchW  = 0;  matchH  = 0;
@@ -85,9 +84,9 @@ function GPUTokenizer() constructor {
 
 	#region jsDoc
 	/// @func    addPattern(_regex)
-	/// @desc    Parses a simplified regex pattern and appends its compiled membership data to the internal compile buffer.
+	/// @desc    Adds a pattern regex to the tokenizer. Patterns are stored and later compiled into the internal NFA program during `compile()`.
 	/// @self    GPUTokenizer
-	/// @param   {String} regex_value : The regex pattern to compile into tokenizer rule data.
+	/// @param   {String} regex_value : The pattern regex to add.
 	/// @returns {Struct.GPUTokenizer}
 	#endregion
     static addPattern = function(_regex) {
@@ -120,7 +119,7 @@ function GPUTokenizer() constructor {
 
 	#region jsDoc
 	/// @func    addDelimiter(_chars)
-	/// @desc    Adds a delimiter rule by compiling the provided character membership set into the internal compile buffer.
+	/// @desc    Marks the provided character set as delimiters in the internal type map. Delimiters split tokens and are not returned as token output.
 	/// @self    GPUTokenizer
 	/// @param   {String} chars_value : The character set or shorthand sequence to treat as delimiters.
 	/// @returns {Struct.GPUTokenizer}
@@ -132,7 +131,7 @@ function GPUTokenizer() constructor {
 
 	#region jsDoc
 	/// @func    addIgnore(_chars)
-	/// @desc    Adds an ignore rule by compiling the provided character membership set into the internal compile buffer.
+	/// @desc    Marks the provided character set as ignored in the internal type map. Ignored bytes are skipped entirely during tokenization.
 	/// @self    GPUTokenizer
 	/// @param   {String} chars_value : The character set or shorthand sequence to ignore during tokenization.
 	/// @returns {Struct.GPUTokenizer}
@@ -159,7 +158,7 @@ function GPUTokenizer() constructor {
 
 	#region jsDoc
 	/// @func    compile()
-	/// @desc    Finalizes the current compile buffer, uploads it to a compile surface, and builds the lookup surface used during tokenization.
+	/// @desc    Compiles all current patterns, type data, and context data into the internal GPU program buffer and uploads it to the program surface for tokenization.
 	/// @self    GPUTokenizer
 	/// @returns {Struct.GPUTokenizer}
 	#endregion
@@ -388,7 +387,7 @@ function GPUTokenizer() constructor {
 
 	#region jsDoc
 	/// @func    tokenize(_input)
-	/// @desc    Tokenizes a source string by uploading it to the source surface and reading back the GPU-produced token buffer.
+	/// @desc    Tokenizes a source string by uploading it to the source surface, running the GPU match and tokenize passes, and reading back the produced token buffer.
 	/// @self    GPUTokenizer
 	/// @param   {String} input_value : The input text to tokenize.
 	/// @returns {Buffer}
@@ -410,7 +409,7 @@ function GPUTokenizer() constructor {
 
 	#region jsDoc
 	/// @func    tokenizeBuffer(_buffer, _byteLen)
-	/// @desc    Tokenizes a prebuilt byte buffer by uploading it to the source surface and reading back the GPU-produced token buffer.
+	/// @desc    Tokenizes a prebuilt byte buffer by uploading it to the source surface, running the GPU match and tokenize passes, and reading back the produced token buffer.
 	/// @self    GPUTokenizer
 	/// @param   {Buffer} buffer_value : The source buffer containing input bytes.
 	/// @param   {Real} byte_length : The number of bytes from the source buffer to tokenize.
@@ -423,13 +422,18 @@ function GPUTokenizer() constructor {
             buffer_poke(_b, 0, buffer_u8, 0);
             return _b;
         }
-
+		
+		if (_byteLen > GPU_TOK_LIMITS.MAX_INPUT_BYTES) {
+			show_error("GPUTokenizer: Input size (" + string(_byteLen) + " bytes) exceeds maximum supported size ("
+				+ string(GPU_TOK_LIMITS.MAX_INPUT_BYTES) + " bytes). Results would be incorrect.", true);
+		}
+		
         // Source surface
         var _srcPx = ceil(_byteLen / 4);
         var _sw = 1; while (_sw * _sw < _srcPx) _sw *= 2;
         var _sh = 1; while (_sh < ceil(_srcPx / _sw)) _sh *= 2;
 
-        // Output surface (2× input)
+        // Output surface (2x input)
         var _outBytes = _byteLen * 2;
         var _outPx = ceil(_outBytes / 4);
         var _ow = 1; while (_ow * _ow < _outPx) _ow *= 2;
@@ -1061,7 +1065,13 @@ enum GPU_TOK_LIMITS {
 	MAX_SHADER_STATES = 64,
 	MAX_EPSILON_PASSES = 16,
 	MAX_CTX_SEQUENCE_BYTES = 1024,
-	MAX_MATCH_OUTER = 65535,
+	
+	// GPU_TOK_MAX_MATCH_MB in sh_gpu_match.fsh controls max single token (default 1 MB)
+	// GPU_TOK_MAX_INPUT_MB in sh_gpu_tokenize.fsh controls max input file (default 1 MB)
+	MAX_INPUT_MB = 1,
+	
+	// Each is MB × 1024 × 1024 total iterations. Each loop level must stay under 65535.
+	MAX_INPUT_BYTES = GPU_TOK_LIMITS.MAX_INPUT_MB * 1024 * 1024,
 }
 
 #endregion
