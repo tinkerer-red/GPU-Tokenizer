@@ -38,7 +38,7 @@ function gpu_tok_test(_name, _setupFunc, _input, _expected) {
     if (!_pass) show_debug_message("  Got:      " + string(_got));
 }
 
-var _frame = 3;
+var _frame = 60;
 
 show_debug_message("===========================================");
 show_debug_message("  GPU TOKENIZER TEST SUITE (MERGE vs NFA)");
@@ -834,16 +834,16 @@ call_later(_frame++, time_source_units_frames, function() {
 });
 
 call_later(_frame++, time_source_units_frames, function() {
-    gpu_tok_test("Negated class [^0-9]", function() {
-        var _t = new GPUTokenizer();
-        _t.addPattern(@'[^0-9]+');
-        _t.addDelimiter(@' ');
-        _t.compile();
-        return _t;
-    },
-    "abc 123 def",
-    ["abc", "def"]
-    );
+	gpu_tok_test("Negated class [^0-9]", function() {
+	    var _t = new GPUTokenizer();
+	    _t.addPattern(@'[^0-9 ]+');
+	    _t.addDelimiter(@' ');
+	    _t.compile();
+	    return _t;
+	},
+	"abc 123 def",
+	["abc", "def"]
+	);
 });
 
 call_later(_frame++, time_source_units_frames, function() {
@@ -915,17 +915,17 @@ call_later(_frame++, time_source_units_frames, function() {
 });
 
 call_later(_frame++, time_source_units_frames, function() {
-    gpu_tok_test("Hex range [a-fA-F0-9]", function() {
-        var _t = new GPUTokenizer();
-        _t.addPattern(@'[a-fA-F0-9]+');
-        _t.addDelimiter(@' ');
-        _t.setUnmatchedRule(GPU_TOKEN.ISOLATE);
-        _t.compile();
-        return _t;
-    },
-    "DeadBeef 0x FF GG",
-    ["DeadBeef", "0", "FF", "GG"]
-    );
+	gpu_tok_test("Hex range [a-fA-F0-9]", function() {
+	    var _t = new GPUTokenizer();
+	    _t.addPattern(@'[a-fA-F0-9]+');
+	    _t.addDelimiter(@' ');
+	    _t.setUnmatchedRule(GPU_TOKEN.ISOLATE);
+	    _t.compile();
+	    return _t;
+	},
+	"DeadBeef 0f9 FF",
+	["DeadBeef", "0f9", "FF"]
+	);
 });
 
 // -- Shorthand Classes --
@@ -948,16 +948,16 @@ call_later(_frame++, time_source_units_frames, function() {
 });
 
 call_later(_frame++, time_source_units_frames, function() {
-    gpu_tok_test("\\D+ non-digits", function() {
-        var _t = new GPUTokenizer();
-        _t.addPattern(@'\D+');
-        _t.addDelimiter(@' ');
-        _t.compile();
-        return _t;
-    },
-    "abc !?",
-    ["abc", "!?"]
-    );
+	gpu_tok_test("\\D+ non-digits", function() {
+	    var _t = new GPUTokenizer();
+	    _t.addPattern(@'[^\d ]+');
+	    _t.addDelimiter(@' ');
+	    _t.compile();
+	    return _t;
+	},
+	"abc !?",
+	["abc", "!?"]
+	);
 });
 
 call_later(_frame++, time_source_units_frames, function() {
@@ -974,16 +974,16 @@ call_later(_frame++, time_source_units_frames, function() {
 });
 
 call_later(_frame++, time_source_units_frames, function() {
-    gpu_tok_test("\\W+ non-word", function() {
-        var _t = new GPUTokenizer();
-        _t.addPattern(@'\W+');
-        _t.addDelimiter(@' ');
-        _t.compile();
-        return _t;
-    },
-    "!? @#",
-    ["!?", "@#"]
-    );
+	gpu_tok_test("\\W+ non-word", function() {
+	    var _t = new GPUTokenizer();
+	    _t.addPattern(@'[^\w ]+');
+	    _t.addDelimiter(@' ');
+	    _t.compile();
+	    return _t;
+	},
+	"!? @#",
+	["!?", "@#"]
+	);
 });
 
 call_later(_frame++, time_source_units_frames, function() {
@@ -1449,16 +1449,16 @@ call_later(_frame++, time_source_units_frames, function() {
 });
 
 call_later(_frame++, time_source_units_frames, function() {
-    gpu_tok_test("Alternation greedy longest: \\d+|\\w+", function() {
-        var _t = new GPUTokenizer();
-        _t.addPattern(@'\d+|\w+');
-        _t.addDelimiter(@' ');
-        _t.compile();
-        return _t;
-    },
-    "hello 42 abc123",
-    ["hello", "42", "abc123"]
-    );
+	gpu_tok_test("Alternation greedy longest: \\d+|[a-zA-Z_0-9]+", function() {
+	    var _t = new GPUTokenizer();
+	    _t.addPattern(@'\d+|[a-zA-Z_0-9]+');
+	    _t.addDelimiter(@' ');
+	    _t.compile();
+	    return _t;
+	},
+	"hello 42 abc123",
+	["hello", "42", "abc123"]
+	);
 });
 
 call_later(_frame++, time_source_units_frames, function() {

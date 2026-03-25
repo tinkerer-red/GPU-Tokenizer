@@ -807,14 +807,19 @@ function GPUTokenizer() constructor {
                 continue;
             }
 
-            // -- Dot --
+			// -- Dot --
             if (_ch == ".") {
-                var _s = _emit(_op, _a, _b, _data, GPU_TOK_STATE_OP.ANY, -1, -1, 0);
+                var _clsBuf = buffer_create(256, buffer_fixed, 1);
+                buffer_fill(_clsBuf, 0, buffer_u8, 255, 256);
+                buffer_poke(_clsBuf, 0x0A, buffer_u8, 0);  // exclude newline
+                var _classId = array_length(_cls_mem);
+                array_push(_cls_mem, _clsBuf);
+                var _s = _emit(_op, _a, _b, _data, GPU_TOK_STATE_OP.CLASS, -1, -1, _classId);
                 array_push(_outStack, { kind: GPU_TOK_REGEX_KIND.ATOM, type: 0, data: { start: _s, outs: [_s * 2] } });
                 _needConcat = true;
                 _pos++; continue;
             }
-
+			
             // -- Literal char --
             var _s = _emit(_op, _a, _b, _data, GPU_TOK_STATE_OP.CHAR, -1, -1, ord(_ch));
             array_push(_outStack, { kind: GPU_TOK_REGEX_KIND.ATOM, type: 0, data: { start: _s, outs: [_s * 2] } });
@@ -1020,6 +1025,7 @@ function GPUTokenizer() constructor {
         buffer_delete(bufCtx);
         buffer_delete(bufTypeMap);
     };
+	
 }
 
 #region Private
