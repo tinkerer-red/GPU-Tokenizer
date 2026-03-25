@@ -1,295 +1,402 @@
 # GPUTokenizer - Advanced Notes
 
-This document is for contributors and integrators who need to understand how the tokenizer is implemented internally. The system is built as a two-stage GPU pipeline: GML writes a compact binary rule stream into a grow buffer, the compile shader turns that stream into a lookup texture, and the tokenizer shader uses that lookup texture to walk source bytes and emit token strings. The constructor itself does not build large intermediate structs or maps for rule compilation; it writes bytes directly into `bufCompile`.
+This document describes the internal architecture of GPUTokenizer for developers who want to extend the tokenizer, debug it, or understand how the current implementation works.
 
-## High-level architecture
+The current design is a two-pass GPU tokenizer built around a Thompson-style NFA. Pattern rules are compiled on the CPU into a packed program buffer, uploaded to a GPU surface, then executed in two passes:
 
-There are three main moving parts:
+1. match-length generation
+2. token assembly
 
-1. **Rule authoring in GML**
+This replaced the older merge-table approach. Pattern matching is now driven by explicit NFA simulation rather than byte-adjacency heuristics.
 
-   * `addPattern`
-   * `addContextPattern`
-   * `addDelimiter`
-   * `addIgnore`
-   * `setUnmatchedRule`
+---
 
-2. **Compile pass**
+## Architecture Overview
 
-   * uploads the raw compile buffer as a texture
-   * runs `sh_gpu_compile`
-   * produces a packed lookup texture
+The tokenizer is split into three major stages:
 
-3. **Tokenize pass**
+### 1) Rule authoring
 
-   * uploads source bytes to a source surface
-   * runs `sh_gpu_tokenizer`
-   * reads back the output surface as a string buffer
+The public API builds the tokenizer definition:
 
-The intended runtime model is compile once, tokenize many times. Recompilation is only needed when rules change or when the lookup surface is lost.
+- `addPattern()`
+- `addContextPattern()`
+- `addDelimiter()`
+- `addIgnore()`
+- `setUnmatchedRule()`
 
-## Rule compilation in GML
+Patterns are stored as regex strings and compiled later. Context rules, delimiter bytes, and ignore bytes are tracked separately so they can be packed into the compiled program image.
 
-Each public `add*` call appends binary data directly into `bufCompile`. The format is byte-oriented and intentionally simple:
+### 2) CPU-side compile
 
-* `PATTERN`: `0x01 | numGroups(u8) | [repeats(u8) | membership(256 bytes)] x groups`
-* `CONTEXT`: `0x02 | open\0 | close\0 | escape\0 | flags(u8)`
-* `DELIMITER`: `0x03 | membership(256 bytes)`
-* `IGNORE`: `0x04 | membership(256 bytes)`
-* `END`: `0x00` 
+`compile()` performs the real compiler stage. It:
 
-For patterns, each group becomes a 256-byte membership table, one byte per possible byte value. Membership is stored as `0` or `255`. The parser in `addPattern` expands bracket expressions, negated sets, ranges, shorthand classes, dot, and repetition markers directly into those tables. Repetition is stored per group as a single byte before the 256-byte membership block.
+- parses pattern regexes
+- builds Thompson-style NFA fragments
+- combines them into a single executable NFA
+- packs states, classes, type data, and context metadata into a single byte buffer
+- uploads that buffer into the program surface
 
-Context rules are stored differently. They serialize three null-terminated strings - open, close, and escape - followed by a bitfield byte for `keepOpen`, `keepClose`, and `keepEscape`. Context bookkeeping is tracked separately through `ctxRuleCount`, `ctxDataBytes`, and later `ctxDataOffset`.
+### 3) GPU runtime
 
-Delimiter and ignore rules are just one 256-byte membership table each. They use the same membership-writing helpers as pattern parsing, but without the group/repeat structure. 
+Tokenization runs in two passes:
 
-## Why membership tables are 256 bytes
+#### Pass 1 - Match lengths
+For each source byte position, the GPU simulates the NFA forward and computes the best greedy match length starting at that position.
 
-The whole implementation is byte-based. Every rule ultimately answers questions of the form:
+#### Pass 2 - Token assembly
+The GPU scans the source again, consumes the match-length texture, applies delimiter/ignore/unmatched behavior, and emits final token bytes. Context rules are resolved here and take priority when they match.
 
-* does this rule match byte `B`?
-* can byte `A` merge into byte `B`?
-* can a token that starts with byte `S` later include byte `C`?
+The intended runtime model is still compile once, tokenize many times.
 
-Using a full 256-byte table per rule group makes those checks simple to evaluate in shaders. It is memory-heavy compared with compressed encodings, but it removes decode complexity in both compile and tokenize stages. 
+---
 
-## Lookup texture layout
+## Internal Data Model
 
-The compile shader produces a single packed lookup texture with this layout:
+The tokenizer maintains four main kinds of compiled data:
 
-* **Byte 0**: type map, 256 bytes
-* **Byte 256**: merge table, 65536 bytes
-* **Byte 65792**: start-merge table, 65536 bytes
-* **Byte 131328**: context start map, 256 bytes
-* **Byte 131584**: context index, `N x 4 bytes`
-* **Variable tail**: context data strings 
+- NFA state table
+- class tables
+- type map
+- context metadata
 
-The important design change in the current architecture is that merge logic operates on **raw byte values**, not on symbolic class IDs. That removed the older class/signature assignment model entirely. The type map now only needs four states: unmatched, delimiter, ignore, and pattern. 
+All of these are packed into a single program buffer and uploaded into the program surface for shader access.
 
-## What each lookup region means
+### CPU-owned compile data
+
+The important CPU-side structures are:
+
+- a list of pattern regex strings
+- serialized context data
+- a byte classification table for delimiter / ignore behavior
+- the final packed program buffer
+
+### GPU runtime surfaces
+
+The runtime uses separate surfaces for:
+
+- source bytes
+- compiled program bytes
+- match lengths
+- final token output
+
+---
+
+## Pattern Compilation
+
+Pattern compilation is handled during `compile()`, not during `addPattern()`.
+
+Each pattern is converted into a Thompson-style NFA fragment. Fragments are built from:
+
+- a start state
+- a list of unresolved outgoing edges to patch later
+
+The implementation uses the following state opcodes:
+
+- `MATCH`
+- `CHAR`
+- `CLASS`
+- `ANY`
+- `JUMP`
+- `SPLIT`
+
+These are enough to represent the current regex feature set cleanly in NFA form.
+
+### Supported structural concepts
+
+The pattern compiler is built around standard fragment construction for:
+
+- literals
+- character classes
+- dot
+- concatenation
+- alternation
+- `*`
+- `+`
+- `?`
+
+The important architectural point is that pattern meaning is now represented as executable NFA states, not as merge tables or byte-pair compatibility data.
+
+---
+
+## Program Buffer Layout
+
+The compiled program is packed into one byte-addressable buffer, then uploaded into a GPU surface.
+
+The packed layout is:
+
+1. header
+2. state table
+3. class tables
+4. type map
+5. context start map
+6. context index
+7. context data
+
+### Header
+
+The header stores the basic program metadata required by the shaders:
+
+- number of states
+- start state
+- number of classes
+- reserved / structural header space
+
+The CPU side also tracks offsets for each major section so the shaders can fetch the correct regions directly.
+
+### State table
+
+Each NFA state occupies 4 bytes:
+
+- opcode
+- edge A
+- edge B
+- data
+
+Field meaning depends on opcode:
+
+- `CHAR`: `data` is the byte to match, `A` is the next state
+- `CLASS`: `data` is the class id, `A` is the next state
+- `ANY`: `A` is the next state
+- `JUMP`: `A` is the jump target
+- `SPLIT`: `A` and `B` are the branch targets
+- `MATCH`: terminal state
+
+### Class tables
+
+Each character class is stored as a 256-byte membership table indexed directly by byte value.
+
+A `CLASS` state references one of these tables by class id.
 
 ### Type map
 
-The type map answers: what is this byte in the general tokenizer sense?
+The type map is a 256-byte classification table used during token assembly. Its current purpose is to identify bytes as:
 
-* `0` unmatched
-* `1` delimiter
-* `2` ignore
-* `3` pattern byte 
+- unmatched
+- delimiter
+- ignore
 
-The compile shader computes this by scanning the serialized rules in order. Ignore and delimiter can return immediately. Pattern membership marks the byte as pattern-matched. 
+This map is not the main pattern engine. Pattern matching is handled by the NFA match pass.
 
-### Merge table
+### Context metadata
 
-The merge table answers: can byte `A` be followed by byte `B` inside the same token?
+Context handling uses three packed regions:
 
-This is computed by walking every pattern rule and checking:
+- context start map
+- context index
+- context data
 
-* self-merge for repeating groups
-* sequential merge between adjacent groups 
+The context start map selects candidate rules by first byte.
 
-When unmatched mode is `CONCATENATE`, the compile shader also marks unmatched-to-unmatched byte pairs as mergeable. 
+The context index stores per-rule metadata:
 
-### Start-merge table
+- context data offset
+- fallback rule index
+- flags
 
-The start-merge table answers: if a token starts with byte `S`, is byte `C` ever valid anywhere in that token's pattern?
+The context data region stores null-terminated open, close, and escape strings.
 
-This helps the tokenizer avoid invalid growth when later bytes would match a different rule shape but not the rule implied by the token start. In practice, the tokenizer checks both `canMerge(prev, cur)` and `canStartMerge(start, cur)` before extending a token.
+---
 
-### Context start map
+## Match Pass
 
-This maps the first byte of an opener to the first context rule index that can start on that byte. If multiple context rules share the same first byte, the compile shader chooses the longest opener first and links shorter candidates through the context index chain. 
+The first shader pass computes greedy match lengths.
 
-### Context index
+For each source position, the match pass:
 
-Each context rule gets four bytes of metadata:
+1. checks whether the start byte is ignorable or a delimiter
+2. seeds the NFA with the compiled start state
+3. computes epsilon closure
+4. simulates the NFA forward byte by byte
+5. tracks the furthest reachable `MATCH`
+6. writes the best match length into the match texture
 
-* context data offset low byte
-* context data offset high byte
-* next fallback rule index
-* flags byte 
+This pass exists to answer one question efficiently:
 
-The fallback index is used when multiple context rules share the same first byte. The tokenizer tries the longest opener first, then falls through to shorter alternatives if the longer one does not match the actual input bytes. 
+> starting at byte `i`, how many bytes does the NFA match?
 
-### Context data
+That is the core replacement for the old merge-table logic.
 
-This is the serialized concatenation of all context strings:
+### State-set execution
 
-* open string + null
-* close string + null
-* escape string + null 
+The shader simulates the NFA using fixed-size current and next state sets. After seeding the start state, it repeatedly:
 
-The tokenizer uses offsets from the context index to fetch opener/closer/escape bytes directly from this tail region. 
+- expands epsilon transitions
+- consumes one source byte
+- computes next active states
+- expands epsilon transitions again
+- checks whether any active state is `MATCH`
 
-## Compile shader flow
+If so, the current consumed length becomes the best length seen so far.
 
-The compile shader reads from the uploaded compile buffer texture using byte-addressed fetch helpers, then writes the packed lookup texture. Its internal helpers do four main jobs:
+The final result for that source position is a single greedy match length.
 
-* `skipString`: walk a null-terminated string
-* `skipRule`: skip a full serialized rule
-* `computeType`
-* `computeMerge`
-* `computeStartMerge`
-* `computeCtxStart`
-* `computeCtxIndex`
-* `computeCtxData` 
+---
 
-The shader works by reconstructing rule meaning directly from the serialized byte stream. There is no separate CPU-side preprocessing step that expands into large rich structures first. That keeps the CPU compiler path straightforward, but it means the compile shader does a lot of repeated scanning work. That tradeoff is acceptable because compile is meant to be much less frequent than tokenize.
+## Token Assembly Pass
 
-## Tokenizer shader flow
+The second shader pass assembles the final token byte stream.
 
-The tokenizer shader receives:
+It consumes:
 
-* source texture dimensions
-* output texture dimensions
-* total source byte count
-* unmatched mode
-* lookup texture dimensions
-* context data offset
-* the compiled lookup texture bound as `u_texLookup`
+- source bytes
+- compiled program data
+- match lengths from pass 1
 
-Its main loop is output-driven. For each output byte position, it scans forward through the source stream until it determines what byte belongs at that output position. The core state machine tracks:
+This pass does not re-run regex logic. It uses the results of pass 1 plus the context/type metadata to produce final output.
 
-* current output position
-* whether it is currently inside a token
-* the previous byte
-* the starting byte of the current token
-* whether it is inside a context
-* context close offset / length
-* context escape offset / length
-* keep-close / keep-escape behavior
-* skip counts for matched opener/closer/escape sequences
+### Main flow
 
-In normal mode, the tokenizer:
+When not in context mode, the token assembly pass behaves like this:
 
-1. checks whether the current byte begins a context
-2. if not, fetches its type from the type map
-3. ignores ignored bytes
-4. uses delimiters to terminate tokens
-5. applies unmatched-mode behavior
-6. uses both merge tables to decide whether a token continues or ends
+1. check whether a context opener matches at the current source position
+2. if so, enter context mode
+3. otherwise skip ignore bytes
+4. terminate tokens on delimiters
+5. if a positive match length exists, begin an NFA token span
+6. otherwise apply unmatched-mode behavior
 
-In context mode, the tokenizer:
+The pass inserts zero bytes between token runs so the CPU can later read the output as consecutive `buffer_string` values.
 
-1. checks escape first
-2. checks close second
-3. otherwise emits raw context bytes
-4. respects `keepClose` and `keepEscape`
-5. exits context when a closer is matched
+### Context handling
 
-## Why both merge tables exist
+Contexts are handled entirely in pass 2.
 
-Using only adjacency merge would allow patterns to drift into shapes that match locally but not globally. The second table constrains token growth by the token's starting byte.
+When a context opener matches:
 
-That combination is what lets patterns like identifiers, numeric forms, and multi-group operator classes behave more consistently without keeping full per-rule runtime state in the tokenizer shader. It is a space-for-simplicity tradeoff.
+- any currently active unmatched run or normal token is terminated
+- the opener may be emitted depending on `keepOpen`
+- close / escape data is loaded from the packed context region
+- the tokenizer enters context mode
 
-## CPU-side runtime path
+While in context mode:
 
-After compilation, tokenization from GML is:
+- escape sequences are checked first
+- close sequences are checked second
+- otherwise raw bytes are emitted into the current token
 
-1. compute required source surface size from byte count
-2. compute required output surface size from `byteLen * 2`
-3. recreate source/output surfaces if dimensions changed
-4. recreate/compile lookup if the lookup surface was lost
-5. copy input bytes into a padded upload buffer
-6. upload the source surface
-7. run tokenizer shader
-8. read back the output surface into a CPU buffer
-9. set `outputLength = byteLen * 2` 
+When the closer is matched, the token is terminated and normal scanning resumes.
 
-A few implementation choices matter here:
+### Context priority
 
-* source and output surfaces are sized to power-of-two-ish square textures derived from total pixels
-* `bufPad` is reused for source upload
-* the output buffer is newly created per tokenize call
-* lookup recompilation is tied to surface loss detection
+Contexts take priority over ordinary pattern scanning.
 
-## Output format
+This is intentional. The engine is hybrid:
 
-The tokenizer shader writes bytes into the output surface. After readback, the caller interprets the result as consecutive `buffer_string` values and reads until `outputLength`. In practice, token boundaries are represented by zero bytes between token runs, which is why the public reader loop can repeatedly call `buffer_read(..., buffer_string)`.
+- NFA matching handles ordinary token patterns
+- dedicated context logic handles strings, comments, and similar delimited regions
+
+Contexts are not represented as part of the regex language itself.
+
+---
+
+## Output Format
+
+The final output surface is read back into a CPU buffer.
+
+That buffer is interpreted as a sequence of null-terminated strings. Public code reads tokens by repeatedly calling `buffer_read(..., buffer_string)` until `outputLength` is reached.
+
+This works because the token assembly pass inserts zero bytes between tokens in the output stream.
+
+---
 
 ## Limitations
 
-These are the main implementation limits currently visible in the architecture.
+These are the architectural limitations contributors should keep in mind.
 
-### 1) Input size is bounded by shader loop ceilings
+### Byte-oriented engine
 
-The tokenizer shader uses bounded nested loops. The implementation notes call out a practical ceiling of about `65535 x 256`, roughly 16 MB of input per tokenize call. This is a loop-structure constraint, not just a buffer-size preference. 
+The tokenizer operates on bytes. States, classes, and tables are all indexed by byte value. The current design is not codepoint-aware and is not a Unicode text engine.
 
-### 2) Context strings are bounded
+### Hybrid design
 
-Context open, close, and escape sequences are effectively bounded by the fixed 1024-iteration loops used in shader-side string walking and matching. Very long delimiters are therefore not supported. 
+Contexts are not part of the NFA itself. They are a separate, higher-priority tokenization system handled during token assembly. This keeps strings and comments practical, but it means the overall tokenizer is intentionally hybrid.
 
-### 3) Context data offset is effectively 16-bit
+### Two-pass runtime cost
 
-The context index stores the data offset as two bytes, low and high. That caps total serialized context data at 65535 bytes unless the index format changes. 
+The current design is more correct than the older merge-table approach, but it costs more at runtime:
 
-### 4) Compile shader rule count is bounded
+- one pass to compute match lengths
+- one pass to assemble tokens
+- one intermediate surface for match results
 
-Several compile-shader scans use loop bounds of 256 rules. That places a practical cap on the number of serialized rules in the compile buffer. 
+### Compact packed fields
 
-### 5) Pattern group count is bounded
+The packed program favors compact byte-oriented storage. That keeps the representation simple and cheap to upload, but it also imposes scaling ceilings on state counts, offsets, and metadata ranges.
 
-Pattern scanning in the compile shader uses a fixed loop bound of 32 groups. Larger patterns would need wider shader bounds or a different representation. 
+---
 
-### 6) Surface volatility is part of the design
+## Current Hard Limits
 
-Because lookup, source, output, and compile all rely on surfaces, surface loss has to be handled. The current implementation recompiles the lookup when needed, but this is still a runtime concern, not an abstract possibility.
+These are the concrete implementation ceilings in the current build.
 
-### 7) The system is strictly byte-oriented
+### 64 active shader states
 
-Everything is framed around 256 possible byte values, fixed membership tables, and raw byte adjacency. That keeps shader logic simple, but it also means the tokenizer is not operating on higher-level Unicode code points internally. 
+The match shader uses fixed-size current and next state arrays of length 64. That is the current active-state budget for runtime NFA simulation.
 
-## Tradeoffs that shaped the implementation
+### 16 epsilon-closure passes
 
-### Raw byte merge tables replaced class/signature IDs
+Epsilon closure is iterated with a fixed 16-pass bound. Deep epsilon-heavy graphs can exceed this limit.
 
-The current system explicitly moved away from class/signature assignment and toward raw byte-level merge tables. This costs space - two 65536-byte tables - but it substantially simplifies the tokenizer runtime and avoids a whole extra indirection layer. 
+### 65535-step NFA scan bound
 
-### Compile cost is accepted to simplify tokenize cost
+Per-start-position NFA stepping is bounded by a fixed maximum iteration count. This places a hard ceiling on how far a single match attempt can extend.
 
-The compile shader does repeated rule scanning and builds a fairly large lookup texture, but tokenize then becomes a mostly table-driven walk. That is the right trade when rule sets are relatively stable and tokenization is frequent.
+### 1024-byte context sequence bound
 
-### CPU rule writing stays simple
+Context open, close, and escape checks use fixed loop bounds up to 1024 bytes. Very long delimiters are therefore not supported without widening those loops.
 
-The GML layer writes bytes directly into `bufCompile` rather than constructing more elaborate intermediate data. That keeps the CPU side easy to reason about and easy to serialize into the compile shader's expected input format.
+### Fixed-width match-length storage
 
-## Known pain points during development
+Match lengths are stored in a packed intermediate format rather than as arbitrary unbounded integers. This places a hard ceiling on the maximum representable match span.
 
-The current architecture exposes a few areas that are functionally fine but were clearly costly or awkward during development:
+### Compact state and metadata references
 
-* pattern parsing in `addPattern` is string-heavy and uses repeated `string_char_at` plus many `buffer_poke` calls
-* the lookup texture is large because both merge tables are full byte-by-byte grids
-* context support is powerful enough for strings and comments, but its metadata model is intentionally narrow
-* the tokenize path still pays for GPU upload and GPU-to-CPU readback on every call
+Several packed references are stored in narrow fields. Extending total state count, context metadata size, or offset range may require widening the program format.
 
-Those are not accidental leftovers. They are direct consequences of favoring a simple byte-addressed GPU runtime over a denser but more complicated model. 
+---
 
-## When to change the architecture
+## Design Tradeoffs
 
-The current design is a good fit when:
+The older design favored a simpler runtime based on byte-merge lookups. The current one makes the opposite trade:
 
-* rules are relatively stable
-* inputs are large enough to justify GPU work
-* byte-oriented tokenization is sufficient
-* contexts are simple opener/closer/escape forms
+- compile is more complex
+- runtime is heavier
+- pattern semantics are much better
+- false positives from merge-style approximation are reduced
+- contexts remain practical and explicit
 
-You would likely need a different architecture if you need:
+This is the right trade if the goal is a more faithful tokenizer rather than the cheapest possible byte-merging system.
 
-* deeper Unicode semantics
-* more than 256 rules
-* more than 32 groups per pattern
-* much larger context metadata
-* nested context grammars
-* parser-grade state rather than tokenizer-grade state
+---
+
+## Extension Guidelines
+
+If you plan to extend the system, the most important things to preserve are:
+
+- compile-once / tokenize-many workflow
+- synchronization between CPU program packing and both shader readers
+- separation between NFA matching and context handling
+- explicit packed-layout versioning discipline if the program format changes
+
+The most fragile areas are:
+
+- state packing / unpacking
+- class table indexing
+- context metadata encoding
+- match-length encoding
+- fixed shader limits
+
+Any change to the packed layout must be reflected everywhere consistently.
+
+---
 
 ## Summary
 
-The core idea is straightforward:
+The current tokenizer is best understood as:
 
-* serialize rules into a byte buffer
-* compile them into a dense GPU lookup texture
-* tokenize by table lookups and context matching rather than by re-evaluating rules directly at runtime
+- CPU-side compilation into a packed NFA program image
+- GPU pass 1 for greedy match-length generation
+- GPU pass 2 for token assembly and context handling
 
-Most of the implementation details - 256-byte membership tables, dual merge tables, compact context index entries, and shader loop bounds - come from that one design decision. The result is a tokenizer that is simple to feed from GML, predictable to execute on the GPU, and bounded by a set of very concrete architectural limits.
+That is the model contributors should use when reasoning about the system or extending it.
