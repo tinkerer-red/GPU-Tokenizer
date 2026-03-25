@@ -1,3 +1,5 @@
+/// @desc Create Event - obj_gpu_tokenizer_test
+
 // Helper: tokenize and return array of strings
 function gpu_tok_to_array(_tokenizer, _input) {
     var _buf = _tokenizer.tokenize(_input);
@@ -13,41 +15,46 @@ function gpu_tok_to_array(_tokenizer, _input) {
 }
 
 // Helper: run a single test with separate compile/tokenize timing
+// _setupFunc receives a constructor function and must return a compiled tokenizer
 function gpu_tok_test(_name, _setupFunc, _input, _expected) {
-    // Time compilation
-    var _t0 = get_timer();
-    var _tok = _setupFunc();
-    var _t1 = get_timer();
-
-    // Time tokenization
-    var _t2 = get_timer();
-    var _got = gpu_tok_to_array(_tok, _input);
-    var _t3 = get_timer();
-
-    var _compileUs = _t1 - _t0;
-    var _tokenizeUs = _t3 - _t2;
-
+    var _iterations = 1000;
+    var _compileTotal = 0;
+    var _tokenizeTotal = 0;
+    var _got, _tok;
+    for (var _i = 0; _i < _iterations; _i++) {
+        var _t0 = get_timer();
+        _tok = _setupFunc();
+        _compileTotal += get_timer() - _t0;
+        var _t2 = get_timer();
+        _got = gpu_tok_to_array(_tok, _input);
+        _tokenizeTotal += get_timer() - _t2;
+        _tok.destroy();
+    }
     var _pass = array_equals(_got, _expected);
-    show_debug_message((_pass ? "PASS" : "FAIL") + " - " + _name
-        + "  (compile: " + string(_compileUs) + "µs, tokenize: " + string(_tokenizeUs) + "µs)");
+    show_debug_message((_pass ? "PASS - " : "FAIL - ") + _name
+        + "  (compile: " + string(_compileTotal / _iterations) + "µs, tokenize: " + string(_tokenizeTotal / _iterations) + "µs)");
     show_debug_message("  Input:    " + string(_input));
     show_debug_message("  Expected: " + string(_expected));
-    if (!_pass) {
-        show_debug_message("  Got:      " + string(_got));
-    }
-    _tok.destroy();
+    if (!_pass) show_debug_message("  Got:      " + string(_got));
 }
 
-var _frame = 1;
+var _frame = 3;
 
 show_debug_message("===========================================");
-show_debug_message("  GPU TOKENIZER TEST SUITE");
+show_debug_message("  GPU TOKENIZER TEST SUITE (MERGE vs NFA)");
 show_debug_message("===========================================");
 
 
-// -- TEST 1: Basic regex patterns --
+// ===========================================
+//  SECTION 1: BASIC REGEX PATTERNS
+// ===========================================
+
 call_later(_frame++, time_source_units_frames, function() {
-    gpu_tok_test("Basic regex patterns", function() {
+    show_debug_message("\n-- SECTION 1: Basic Regex Patterns --");
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Simple identifiers and numbers", function() {
         var _t = new GPUTokenizer();
         _t.addPattern(@'\w[\w\d]*');
         _t.addPattern(@'\d+');
@@ -63,10 +70,8 @@ call_later(_frame++, time_source_units_frames, function() {
     );
 });
 
-
-// -- TEST 2: Identifiers with digits stay merged --
 call_later(_frame++, time_source_units_frames, function() {
-    gpu_tok_test("Identifiers with digits", function() {
+    gpu_tok_test("Identifiers with embedded digits", function() {
         var _t = new GPUTokenizer();
         _t.addPattern(@'\w[\w\d]*');
         _t.addPattern(@'\d+');
@@ -80,10 +85,8 @@ call_later(_frame++, time_source_units_frames, function() {
     );
 });
 
-
-// -- TEST 3: Multi-character operators --
 call_later(_frame++, time_source_units_frames, function() {
-    gpu_tok_test("Multi-char operators", function() {
+    gpu_tok_test("Multi-char operators merge", function() {
         var _t = new GPUTokenizer();
         _t.addPattern(@'\w[\w\d]*');
         _t.addPattern(@'\d+');
@@ -98,143 +101,6 @@ call_later(_frame++, time_source_units_frames, function() {
     );
 });
 
-
-// -- TEST 4: String literals with escape --
-call_later(_frame++, time_source_units_frames, function() {
-    gpu_tok_test("String with escape", function() {
-        var _t = new GPUTokenizer();
-        _t.addPattern(@'\w[\w\d]*');
-        _t.addPattern(@'[=;]+');
-        _t.addContextPattern(@'"', @'"', @'\');
-        _t.addDelimiter(@' \t');
-        _t.compile();
-        return _t;
-    },
-    @'x = "hello \"world\"";',
-    ["x", "=", @'"hello \"world\""', ";"]
-    );
-});
-
-
-// -- TEST 5: Line comments --
-call_later(_frame++, time_source_units_frames, function() {
-    gpu_tok_test("Line comments", function() {
-        var _t = new GPUTokenizer();
-        _t.addPattern(@'\w[\w\d]*');
-        _t.addPattern(@'\d+');
-        _t.addPattern(@'[=;]+');
-        _t.addContextPattern("//", "\n", "");
-        _t.addDelimiter(@' \t');
-        _t.addIgnore(@'\r');
-        _t.compile();
-        return _t;
-    },
-    "x = 5; // comment\ny = 10;",
-    ["x", "=", "5", ";", "// comment\n", "y", "=", "10", ";"]
-    );
-});
-
-
-// -- TEST 6: Block comments --
-call_later(_frame++, time_source_units_frames, function() {
-    gpu_tok_test("Block comments", function() {
-        var _t = new GPUTokenizer();
-        _t.addPattern(@'\w[\w\d]*');
-        _t.addPattern(@'[=;]+');
-        _t.addContextPattern("/*", "*/", "");
-        _t.addDelimiter(@' \t\n');
-        _t.compile();
-        return _t;
-    },
-    "a = /* block\ncomment */ b;",
-    ["a", "=", "/* block\ncomment */", "b", ";"]
-    );
-});
-
-
-// -- TEST 7: Triple-quote priority over single-quote --
-call_later(_frame++, time_source_units_frames, function() {
-    gpu_tok_test("Triple-quote priority", function() {
-        var _t = new GPUTokenizer();
-        _t.addPattern(@'\w[\w\d]*');
-        _t.addPattern(@'[=;]+');
-        _t.addContextPattern(@'"""', @'"""', "");
-        _t.addContextPattern(@'"', @'"', @'\');
-        _t.addDelimiter(@' \t');
-        _t.compile();
-        return _t;
-    },
-    @'x = """triple""" y = "single"',
-    ["x", "=", @'"""triple"""', "y", "=", @'"single"']
-    );
-});
-
-
-// -- TEST 8: Unmatched OMIT --
-call_later(_frame++, time_source_units_frames, function() {
-    gpu_tok_test("Unmatched OMIT", function() {
-        var _t = new GPUTokenizer();
-        _t.addPattern(@'\w[\w\d]*');
-        _t.setUnmatchedRule(GPU_TOKEN.OMIT);
-        _t.addDelimiter(@' ');
-        _t.compile();
-        return _t;
-    },
-    "abc ! def",
-    ["abc", "def"]
-    );
-});
-
-
-// -- TEST 9: Unmatched ISOLATE --
-call_later(_frame++, time_source_units_frames, function() {
-    gpu_tok_test("Unmatched ISOLATE", function() {
-        var _t = new GPUTokenizer();
-        _t.addPattern(@'\w[\w\d]*');
-        _t.setUnmatchedRule(GPU_TOKEN.ISOLATE);
-        _t.addDelimiter(@' ');
-        _t.compile();
-        return _t;
-    },
-    "a!b",
-    ["a", "!", "b"]
-    );
-});
-
-
-// -- TEST 10: Unmatched CONCATENATE --
-call_later(_frame++, time_source_units_frames, function() {
-    gpu_tok_test("Unmatched CONCATENATE", function() {
-        var _t = new GPUTokenizer();
-        _t.addPattern(@'\w[\w\d]*');
-        _t.setUnmatchedRule(GPU_TOKEN.CONCATENATE);
-        _t.addDelimiter(@' ');
-        _t.compile();
-        return _t;
-    },
-    "a!!b",
-    ["a", "!!", "b"]
-    );
-});
-
-
-// -- TEST 11: addIgnore strips \r --
-call_later(_frame++, time_source_units_frames, function() {
-    gpu_tok_test("Ignored characters", function() {
-        var _t = new GPUTokenizer();
-        _t.addPattern(@'\w[\w\d]*');
-        _t.addDelimiter(@'\n');
-        _t.addIgnore(@'\r');
-        _t.compile();
-        return _t;
-    },
-    "abc\r\ndef",
-    ["abc", "def"]
-    );
-});
-
-
-// -- TEST 12: Float numbers --
 call_later(_frame++, time_source_units_frames, function() {
     gpu_tok_test("Float numbers", function() {
         var _t = new GPUTokenizer();
@@ -251,10 +117,315 @@ call_later(_frame++, time_source_units_frames, function() {
     );
 });
 
-
-// -- TEST 13: HTML comments (long open/close sequences) --
 call_later(_frame++, time_source_units_frames, function() {
-    gpu_tok_test("HTML comments", function() {
+    gpu_tok_test("Single character punctuation", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'[(){}\[\];]');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "( ) { } [ ] ;",
+    ["(", ")", "{", "}", "[", "]", ";"]
+    );
+});
+
+
+// ===========================================
+//  SECTION 2: DIRECTION / START-MERGE
+// ===========================================
+
+call_later(_frame++, time_source_units_frames, function() {
+    show_debug_message("\n-- SECTION 2: Direction / Start-Merge --");
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("abc123 stays merged", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w[\w\d]*');
+        _t.addPattern(@'\d+');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "abc123",
+    ["abc123"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("123abc splits", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w[\w\d]*');
+        _t.addPattern(@'\d+');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "123abc",
+    ["123", "abc"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Mixed: abc123 def 456ghi", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w[\w\d]*');
+        _t.addPattern(@'\d+');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "abc123 def 456ghi",
+    ["abc123", "def", "456", "ghi"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("_123 stays merged (underscore starts identifier)", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w[\w\d]*');
+        _t.addPattern(@'\d+');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "_123",
+    ["_123"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("3.14 stays, .5 splits", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\d+\.\d+');
+        _t.addPattern(@'\d+');
+        _t.addDelimiter(@' ');
+        _t.setUnmatchedRule(GPU_TOKEN.ISOLATE);
+        _t.compile();
+        return _t;
+    },
+    "3.14 .5",
+    ["3.14", ".", "5"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("3..14 splits at second dot", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\d+\.\d+');
+        _t.addPattern(@'\d+');
+        _t.addDelimiter(@' ');
+        _t.setUnmatchedRule(GPU_TOKEN.ISOLATE);
+        _t.compile();
+        return _t;
+    },
+    "3..14",
+    ["3", ".", ".", "14"]
+    );
+});
+
+
+// ===========================================
+//  SECTION 3: UNMATCHED BYTE MODES
+// ===========================================
+
+call_later(_frame++, time_source_units_frames, function() {
+    show_debug_message("\n-- SECTION 3: Unmatched Byte Modes --");
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("OMIT: unmatched disappear", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w[\w\d]*');
+        _t.setUnmatchedRule(GPU_TOKEN.OMIT);
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "abc ! def",
+    ["abc", "def"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("ISOLATE: each unmatched is own token", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w[\w\d]*');
+        _t.setUnmatchedRule(GPU_TOKEN.ISOLATE);
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "a!b",
+    ["a", "!", "b"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("CONCATENATE: consecutive unmatched merge", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w[\w\d]*');
+        _t.setUnmatchedRule(GPU_TOKEN.CONCATENATE);
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "a!!b",
+    ["a", "!!", "b"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("ISOLATE: multiple different unmatched", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w[\w\d]*');
+        _t.setUnmatchedRule(GPU_TOKEN.ISOLATE);
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "a!@#b",
+    ["a", "!", "@", "#", "b"]
+    );
+});
+
+
+// ===========================================
+//  SECTION 4: DELIMITER AND IGNORE
+// ===========================================
+
+call_later(_frame++, time_source_units_frames, function() {
+    show_debug_message("\n-- SECTION 4: Delimiter and Ignore --");
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Ignore strips \\r, \\n delimits", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w[\w\d]*');
+        _t.addDelimiter(@'\n');
+        _t.addIgnore(@'\r');
+        _t.compile();
+        return _t;
+    },
+    "abc\r\ndef",
+    ["abc", "def"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Multiple consecutive delimiters", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w+');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "abc     def",
+    ["abc", "def"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Tab and space both delimit", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w+');
+        _t.addDelimiter(@' \t');
+        _t.compile();
+        return _t;
+    },
+    "a\tb c",
+    ["a", "b", "c"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("CSV: comma as delimiter", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'[^,\n]+');
+        _t.addDelimiter(",");
+        _t.compile();
+        return _t;
+    },
+    "apple,banana,cherry",
+    ["apple", "banana", "cherry"]
+    );
+});
+
+
+// ===========================================
+//  SECTION 5: CONTEXT PATTERNS
+// ===========================================
+
+call_later(_frame++, time_source_units_frames, function() {
+    show_debug_message("\n-- SECTION 5: Context Patterns --");
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Double-quoted string with escape", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w[\w\d]*');
+        _t.addPattern(@'[=;]+');
+        _t.addContextPattern(@'"', @'"', @'\');
+        _t.addDelimiter(@' \t');
+        _t.compile();
+        return _t;
+    },
+    @'x = "hello \"world\"";',
+    ["x", "=", @'"hello \"world\""', ";"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Line comment captures to newline", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w[\w\d]*');
+        _t.addPattern(@'\d+');
+        _t.addPattern(@'[=;]+');
+        _t.addContextPattern("//", "\n", "");
+        _t.addDelimiter(@' \t');
+        _t.addIgnore(@'\r');
+        _t.compile();
+        return _t;
+    },
+    "x = 5; // comment\ny = 10;",
+    ["x", "=", "5", ";", "// comment\n", "y", "=", "10", ";"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Block comment spans newlines", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w[\w\d]*');
+        _t.addPattern(@'[=;]+');
+        _t.addContextPattern("/*", "*/", "");
+        _t.addDelimiter(@' \t\n');
+        _t.compile();
+        return _t;
+    },
+    "a = /* block\ncomment */ b;",
+    ["a", "=", "/* block\ncomment */", "b", ";"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Triple-quote priority", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w[\w\d]*');
+        _t.addPattern(@'[=;]+');
+        _t.addContextPattern(@'"""', @'"""', "");
+        _t.addContextPattern(@'"', @'"', @'\');
+        _t.addDelimiter(@' \t');
+        _t.compile();
+        return _t;
+    },
+    @'x = """triple""" y = "single"',
+    ["x", "=", @'"""triple"""', "y", "=", @'"single"']
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("HTML comment (4-byte opener)", function() {
         var _t = new GPUTokenizer();
         _t.addPattern(@'\w[\w\d\-]*');
         _t.addPattern(@'[<>/=]+');
@@ -268,53 +439,6 @@ call_later(_frame++, time_source_units_frames, function() {
     );
 });
 
-
-// -- TEST 14: CSV splitting --
-call_later(_frame++, time_source_units_frames, function() {
-    gpu_tok_test("CSV splitting", function() {
-        var _t = new GPUTokenizer();
-        _t.addPattern(@'[^,\n]+');
-        _t.addDelimiter(",");
-        _t.compile();
-        return _t;
-    },
-    "apple,banana,cherry",
-    ["apple", "banana", "cherry"]
-    );
-});
-
-
-// -- TEST 15: Empty input --
-call_later(_frame++, time_source_units_frames, function() {
-    gpu_tok_test("Empty input", function() {
-        var _t = new GPUTokenizer();
-        _t.addPattern(@'\w+');
-        _t.addDelimiter(@' ');
-        _t.compile();
-        return _t;
-    },
-    "",
-    []
-    );
-});
-
-
-// -- TEST 16: Single character tokens --
-call_later(_frame++, time_source_units_frames, function() {
-    gpu_tok_test("Single char tokens", function() {
-        var _t = new GPUTokenizer();
-        _t.addPattern(@'[(){}\[\];]');
-        _t.addDelimiter(@' ');
-        _t.compile();
-        return _t;
-    },
-    "( ) { } [ ] ;",
-    ["(", ")", "{", "}", "[", "]", ";"]
-    );
-});
-
-
-// -- TEST 17: Multiple context patterns on same byte --
 call_later(_frame++, time_source_units_frames, function() {
     gpu_tok_test("Chained context: // vs /*", function() {
         var _t = new GPUTokenizer();
@@ -332,10 +456,8 @@ call_later(_frame++, time_source_units_frames, function() {
     );
 });
 
-
-// -- TEST 18: Raw strings --
 call_later(_frame++, time_source_units_frames, function() {
-    gpu_tok_test("Raw strings @'...'", function() {
+    gpu_tok_test("Raw string @'...'", function() {
         var _t = new GPUTokenizer();
         _t.addPattern(@'\w[\w\d]*');
         _t.addPattern(@'[=;]+');
@@ -349,404 +471,329 @@ call_later(_frame++, time_source_units_frames, function() {
     );
 });
 
-// -- TEST 19: tokenizeBuffer parity --
 call_later(_frame++, time_source_units_frames, function() {
-	var _t0 = get_timer();
+    gpu_tok_test("Empty string literal", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w[\w\d]*');
+        _t.addPattern(@'[=;]+');
+        _t.addContextPattern(@'"', @'"', @'\');
+        _t.addDelimiter(@' \t');
+        _t.compile();
+        return _t;
+    },
+    @'x = "";',
+    ["x", "=", @'""', ";"]
+    );
+});
 
-	var _tok = (function() {
-		var _t = new GPUTokenizer();
-		_t.addPattern(@'\w[\w\d]*');
-		_t.addPattern(@'\d+');
-		_t.addPattern(@'[=;]+');
-		_t.addDelimiter(@' \t');
-		_t.compile();
-		return _t;
-	})();
-
-	var _t1 = get_timer();
-
-	var _src = buffer_create(string_byte_length("alpha = beta123 ;") + 1, buffer_fixed, 1);
-	buffer_write(_src, buffer_text, "alpha = beta123 ;");
-
-	var _t2 = get_timer();
-
-	var _buf = _tok.tokenizeBuffer(_src, string_byte_length("alpha = beta123 ;"));
-	var _got = [];
-	buffer_seek(_buf, buffer_seek_start, 0);
-	while (buffer_tell(_buf) < _tok.outputLength) {
-		var _token = buffer_read(_buf, buffer_string);
-		if (_token == "") break;
-		array_push(_got, _token);
-	}
-
-	var _t3 = get_timer();
-
-	var _expected = ["alpha", "=", "beta123", ";"];
-	var _pass = array_equals(_got, _expected);
-	show_debug_message((_pass ? "PASS" : "FAIL") + " - tokenizeBuffer parity"
-		+ "  (compile: " + string(_t1 - _t0) + "µs, tokenizeBuffer: " + string(_t3 - _t2) + "µs)");
-	show_debug_message("  Input:    " + string("alpha = beta123 ;"));
-	show_debug_message("  Expected: " + string(_expected));
-	if (!_pass) {
-		show_debug_message("  Got:      " + string(_got));
-	}
-
-	buffer_delete(_buf);
-	buffer_delete(_src);
-	_tok.destroy();
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Escaped escape char inside string", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w[\w\d]*');
+        _t.addPattern(@'[=;]+');
+        _t.addContextPattern(@'"', @'"', @'\');
+        _t.addDelimiter(@' \t');
+        _t.compile();
+        return _t;
+    },
+    @'x = "a\\b";',
+    ["x", "=", @'"a\\b"', ";"]
+    );
 });
 
 
-// -- TEST 20: Context keepOpen false --
+// ===========================================
+//  SECTION 6: KEEP FLAGS
+// ===========================================
+
 call_later(_frame++, time_source_units_frames, function() {
-	gpu_tok_test("Context keepOpen false", function() {
-		var _t = new GPUTokenizer();
-		_t.addPattern(@'\w[\w\d]*');
-		_t.addPattern(@'[=;]+');
-		_t.addContextPattern(@'"', @'"', @'\', false, true, true);
-		_t.addDelimiter(@' \t');
-		_t.compile();
-		return _t;
-	},
-	@'x = "value";',
-	["x", "=", @'value"', ";"]
-	);
+    show_debug_message("\n-- SECTION 6: Keep Flags --");
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("keepOpen=false, keepClose=false: content only", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w[\w\d]*');
+        _t.addPattern(@'[=;]+');
+        _t.addContextPattern(@'"', @'"', @'\', false, false, true);
+        _t.addDelimiter(@' \t');
+        _t.compile();
+        return _t;
+    },
+    @'x = "hello";',
+    ["x", "=", "hello", ";"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("keepEscape=false: parsed string", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w[\w\d]*');
+        _t.addPattern(@'[=;]+');
+        _t.addContextPattern(@'"', @'"', @'\', false, false, false);
+        _t.addDelimiter(@' \t');
+        _t.compile();
+        return _t;
+    },
+    @'x = "hello \"world\"";',
+    ["x", "=", @'hello "world"', ";"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("BBCode strip brackets", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w[\w\d=]*');
+        _t.addContextPattern("[", "]", "", false, false);
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "[size=2] hello [/size]",
+    ["size=2", "hello", "/size"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Line comment keepClose=false: strip newline", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w[\w\d]*');
+        _t.addPattern(@'\d+');
+        _t.addPattern(@'[=;]+');
+        _t.addContextPattern("//", "\n", "", true, false);
+        _t.addDelimiter(@' \t\n');
+        _t.compile();
+        return _t;
+    },
+    "x = 5; // comment\ny = 10;",
+    ["x", "=", "5", ";", "// comment", "y", "=", "10", ";"]
+    );
 });
 
 
-// -- TEST 21: Context keepClose false --
+// ===========================================
+//  SECTION 7: EDGE CASES
+// ===========================================
+
 call_later(_frame++, time_source_units_frames, function() {
-	gpu_tok_test("Context keepClose false", function() {
-		var _t = new GPUTokenizer();
-		_t.addPattern(@'\w[\w\d]*');
-		_t.addPattern(@'[=;]+');
-		_t.addContextPattern(@'"', @'"', @'\', true, false, true);
-		_t.addDelimiter(@' \t');
-		_t.compile();
-		return _t;
-	},
-	@'x = "value";',
-	["x", "=", @'"value', ";"]
-	);
+    show_debug_message("\n-- SECTION 7: Edge Cases --");
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Empty input", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w+');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "",
+    []
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Only delimiters", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w+');
+        _t.addDelimiter(@' \t');
+        _t.compile();
+        return _t;
+    },
+    "   \t  \t  ",
+    []
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Single character input", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w+');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    "x",
+    ["x"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Unclosed context at end of input", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w+');
+        _t.addContextPattern(@'"', @'"', @'\');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    @'hello "unclosed',
+    ["hello", @'"unclosed']
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Adjacent context patterns", function() {
+        var _t = new GPUTokenizer();
+        _t.addContextPattern(@'"', @'"', @'\');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    @'"abc""def"',
+    [ @'"abc"', @'"def"']
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Context is entire input", function() {
+        var _t = new GPUTokenizer();
+        _t.addContextPattern(@'"', @'"', @'\');
+        _t.compile();
+        return _t;
+    },
+    @'"hello world"',
+    [ @'"hello world"']
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Escaped char at end of string", function() {
+        var _t = new GPUTokenizer();
+        _t.addContextPattern(@'"', @'"', @'\');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    @'"test\\"',
+    [ @'"test\\"']
+    );
 });
 
 
-// -- TEST 22: Context keepEscape false --
+// ===========================================
+//  SECTION 8: UTF-8
+// ===========================================
+
 call_later(_frame++, time_source_units_frames, function() {
-	gpu_tok_test("Context keepEscape false", function() {
-		var _t = new GPUTokenizer();
-		_t.addPattern(@'\w[\w\d]*');
-		_t.addPattern(@'[=;]+');
-		_t.addContextPattern(@'"', @'"', @'\', true, true, false);
-		_t.addDelimiter(@' \t');
-		_t.compile();
-		return _t;
-	},
-	@'x = "a\"b";',
-	["x", "=", @'"a"b"', ";"]
-	);
+    show_debug_message("\n-- SECTION 8: UTF-8 --");
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("UTF-8 inside context pattern (string)", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w[\w\d]*');
+        _t.addPattern(@'[=;]+');
+        _t.addContextPattern(@'"', @'"', @'\');
+        _t.addDelimiter(@' \t');
+        _t.compile();
+        return _t;
+    },
+    @'x = "héllo wörld";',
+    ["x", "=", @'"héllo wörld"', ";"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Emoji inside context pattern", function() {
+        var _t = new GPUTokenizer();
+        _t.addContextPattern(@'"', @'"', @'\');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    @'"hello 🌍"',
+    [ @'"hello 🌍"']
+    );
 });
 
 
-// -- TEST 23: Ignore byte inside context close --
+// ===========================================
+//  SECTION 9: COMPLEX / REAL-WORLD
+// ===========================================
+
 call_later(_frame++, time_source_units_frames, function() {
-	gpu_tok_test("Ignore inside context close", function() {
-		var _t = new GPUTokenizer();
-		_t.addPattern(@'\w[\w\d]*');
-		_t.addContextPattern("/*", "*/\r", "");
-		_t.addDelimiter(@' \t\n');
-		_t.addIgnore(@'\r');
-		_t.compile();
-		return _t;
-	},
-	"alpha /* body */\r beta",
-	["alpha", "/* body */\r", "beta"]
-	);
+    show_debug_message("\n-- SECTION 9: Complex / Real-world --");
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Full GML-style tokenizer", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w[\w\d]*');
+        _t.addPattern(@'\d+\.\d+');
+        _t.addPattern(@'\d+');
+        _t.addPattern(@'[+\-*/=<>!&|^~%?]+');
+        _t.addPattern(@'[(){}\[\];,:.#$@]');
+        _t.addContextPattern(@'"', @'"', @'\');
+        _t.addContextPattern("//", "\n", "");
+        _t.addContextPattern("/*", "*/", "");
+        _t.addDelimiter(@' \t');
+        _t.addIgnore(@'\r');
+        _t.setUnmatchedRule(GPU_TOKEN.ISOLATE);
+        _t.compile();
+        return _t;
+    },
+    "var _x = 3.14 + foo(); // done",
+    ["var", "_x", "=", "3.14", "+", "foo", "(", ")", ";", "// done"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Block comment containing quotes", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w+');
+        _t.addContextPattern(@'"', @'"', @'\');
+        _t.addContextPattern("/*", "*/", "");
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    @'/* "not a string" */ hello',
+    [ @'/* "not a string" */', "hello"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("String containing comment-like content", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w+');
+        _t.addContextPattern(@'"', @'"', @'\');
+        _t.addContextPattern("//", "\n", "");
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    @'"hello // world" foo',
+    [ @'"hello // world"', "foo"]
+    );
+});
+
+call_later(_frame++, time_source_units_frames, function() {
+    gpu_tok_test("Multiple strings on one line", function() {
+        var _t = new GPUTokenizer();
+        _t.addPattern(@'\w+');
+        _t.addPattern(@'[+]+');
+        _t.addContextPattern(@'"', @'"', @'\');
+        _t.addDelimiter(@' ');
+        _t.compile();
+        return _t;
+    },
+    @'"abc" + "def" + "ghi"',
+    [ @'"abc"', "+", @'"def"', "+", @'"ghi"']
+    );
 });
 
 
-// -- TEST 24: Plus quantifier repetition --
-call_later(_frame++, time_source_units_frames, function() {
-	gpu_tok_test("Plus quantifier repetition", function() {
-		var _t = new GPUTokenizer();
-		_t.addPattern(@'ab+c');
-		_t.addDelimiter(@' ');
-		_t.compile();
-		return _t;
-	},
-	"abbbc",
-	["abbbc"]
-	);
-});
+// ===========================================
+//  DONE
+// ===========================================
 
-
-// -- TEST 25: Star quantifier repetition --
-call_later(_frame++, time_source_units_frames, function() {
-	gpu_tok_test("Star quantifier repetition", function() {
-		var _t = new GPUTokenizer();
-		_t.addPattern(@'ab*c');
-		_t.addDelimiter(@' ');
-		_t.compile();
-		return _t;
-	},
-	"ac abbc",
-	["ac", "abbc"]
-	);
-});
-
-
-// -- TEST 26: Range class a-z --
-call_later(_frame++, time_source_units_frames, function() {
-	gpu_tok_test("Range class a-z", function() {
-		var _t = new GPUTokenizer();
-		_t.addPattern(@'[a-z]+');
-		_t.addDelimiter(@' ');
-		_t.compile();
-		return _t;
-	},
-	"abc xyz",
-	["abc", "xyz"]
-	);
-});
-
-
-// -- TEST 27: Escaped hyphen in class --
-call_later(_frame++, time_source_units_frames, function() {
-	gpu_tok_test("Escaped hyphen in class", function() {
-		var _t = new GPUTokenizer();
-		_t.addPattern(@'[a\-z]+');
-		_t.addDelimiter(@' ');
-		_t.compile();
-		return _t;
-	},
-	"a-z",
-	["a-z"]
-	);
-});
-
-
-// -- TEST 28: Negated class --
-call_later(_frame++, time_source_units_frames, function() {
-	gpu_tok_test("Negated class", function() {
-		var _t = new GPUTokenizer();
-		_t.addPattern(@'[^,\n]+');
-		_t.addDelimiter(",");
-		_t.compile();
-		return _t;
-	},
-	"one,two,three",
-	["one", "two", "three"]
-	);
-});
-
-
-// -- TEST 29: Dot excludes newline --
-call_later(_frame++, time_source_units_frames, function() {
-	gpu_tok_test("Dot excludes newline", function() {
-		var _t = new GPUTokenizer();
-		_t.addPattern(@'.');
-		_t.addIgnore(@'\n');
-		_t.compile();
-		return _t;
-	},
-	"ab\ncd",
-	["a", "b", "c", "d"]
-	);
-});
-
-
-// -- TEST 30: Shorthand D --
-call_later(_frame++, time_source_units_frames, function() {
-	gpu_tok_test("Shorthand D", function() {
-		var _t = new GPUTokenizer();
-		_t.addPattern(@'\D+');
-		_t.addDelimiter(@' ');
-		_t.compile();
-		return _t;
-	},
-	"abc !?",
-	["abc", "!?"]
-	);
-});
-
-
-// -- TEST 31: Shorthand W --
-call_later(_frame++, time_source_units_frames, function() {
-	gpu_tok_test("Shorthand W", function() {
-		var _t = new GPUTokenizer();
-		_t.addPattern(@'\W+');
-		_t.addDelimiter(@' ');
-		_t.compile();
-		return _t;
-	},
-	"!? @#",
-	["!?", "@#"]
-	);
-});
-
-
-// -- TEST 32: Shorthand S --
-call_later(_frame++, time_source_units_frames, function() {
-	gpu_tok_test("Shorthand S", function() {
-		var _t = new GPUTokenizer();
-		_t.addPattern(@'\S+');
-		_t.addDelimiter(@' \t\n');
-		_t.compile();
-		return _t;
-	},
-	"abc\tdef\nghi",
-	["abc", "def", "ghi"]
-	);
-});
-
-
-// -- TEST 33: Pattern vs context on slash --
-call_later(_frame++, time_source_units_frames, function() {
-	gpu_tok_test("Pattern vs context on slash", function() {
-		var _t = new GPUTokenizer();
-		_t.addPattern(@'[\/]+');
-		_t.addContextPattern("//", "\n", "");
-		_t.addContextPattern("/*", "*/", "");
-		_t.addDelimiter(@' \t');
-		_t.addIgnore(@'\n');
-		_t.compile();
-		return _t;
-	},
-	"/ // line\n /* block */",
-	["/", "// line\n", "/* block */"]
-	);
-});
-
-
-// -- TEST 34: Delimiter only input --
-call_later(_frame++, time_source_units_frames, function() {
-	gpu_tok_test("Delimiter only input", function() {
-		var _t = new GPUTokenizer();
-		_t.addPattern(@'\w+');
-		_t.addDelimiter(@' ,\t');
-		_t.compile();
-		return _t;
-	},
-	" ,\t, ",
-	[]
-	);
-});
-
-
-// -- TEST 35: Ignore only input --
-call_later(_frame++, time_source_units_frames, function() {
-	gpu_tok_test("Ignore only input", function() {
-		var _t = new GPUTokenizer();
-		_t.addPattern(@'\w+');
-		_t.addIgnore(@' \t\r\n');
-		_t.compile();
-		return _t;
-	},
-	" \t\r\n",
-	[]
-	);
-});
-
-
-// -- TEST 36: Unmatched only input ISOLATE --
-call_later(_frame++, time_source_units_frames, function() {
-	gpu_tok_test("Unmatched only input ISOLATE", function() {
-		var _t = new GPUTokenizer();
-		_t.addPattern(@'\w+');
-		_t.setUnmatchedRule(GPU_TOKEN.ISOLATE);
-		_t.compile();
-		return _t;
-	},
-	"!@#",
-	["!", "@", "#"]
-	);
-});
-
-
-// -- TEST 37: Unmatched only input CONCATENATE --
-call_later(_frame++, time_source_units_frames, function() {
-	gpu_tok_test("Unmatched only input CONCATENATE", function() {
-		var _t = new GPUTokenizer();
-		_t.addPattern(@'\w+');
-		_t.setUnmatchedRule(GPU_TOKEN.CONCATENATE);
-		_t.compile();
-		return _t;
-	},
-	"!@#",
-	["!@#"]
-	);
-});
-
-
-// -- TEST 38: Empty context body --
-call_later(_frame++, time_source_units_frames, function() {
-	gpu_tok_test("Empty context body", function() {
-		var _t = new GPUTokenizer();
-		_t.addPattern(@'\w[\w\d]*');
-		_t.addPattern(@'[=;]+');
-		_t.addContextPattern(@'"', @'"', @'\');
-		_t.addDelimiter(@' \t');
-		_t.compile();
-		return _t;
-	},
-	@'x = "";',
-	["x", "=", @'""', ";"]
-	);
-});
-
-
-// -- TEST 39: Unterminated context at eof --
-call_later(_frame++, time_source_units_frames, function() {
-	gpu_tok_test("Unterminated context at eof", function() {
-		var _t = new GPUTokenizer();
-		_t.addPattern(@'\w[\w\d]*');
-		_t.addContextPattern(@'"', @'"', @'\');
-		_t.addDelimiter(@' ');
-		_t.compile();
-		return _t;
-	},
-	@'"unterminated',
-	[ @'"unterminated']
-	);
-});
-
-
-// -- TEST 40: Pattern vs quote context --
-call_later(_frame++, time_source_units_frames, function() {
-	gpu_tok_test("Pattern vs quote context", function() {
-		var _t = new GPUTokenizer();
-		_t.addPattern(@'\w[\w\d]*');
-		_t.addContextPattern(@'"', @'"', @'\');
-		_t.addDelimiter(@' ');
-		_t.compile();
-		return _t;
-	},
-	@'name "value" other',
-	["name", @'"value"', "other"]
-	);
-});
-
-
-// -- TEST 41: Large input resize sanity --
-call_later(_frame++, time_source_units_frames, function() {
-	gpu_tok_test("Large input resize sanity", function() {
-		var _t = new GPUTokenizer();
-		_t.addPattern(@'\w+');
-		_t.addDelimiter(@' ');
-		_t.compile();
-		return _t;
-	},
-	"aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj kkkk llll mmmm nnnn oooo pppp qqqq rrrr ssss tttt",
-	["aaaa", "bbbb", "cccc", "dddd", "eeee", "ffff", "gggg", "hhhh", "iiii", "jjjj", "kkkk", "llll", "mmmm", "nnnn", "oooo", "pppp", "qqqq", "rrrr", "ssss", "tttt"]
-	);
-});
-
-// -- DONE --
 call_later(_frame++, time_source_units_frames, function() {
     show_debug_message("\n===========================================");
     show_debug_message("  ALL TESTS COMPLETE");
     show_debug_message("===========================================");
 });
+
 
 // -- STRESS TEST - Bee Movie Script --
 call_later(_frame++, time_source_units_frames, function() {
@@ -789,4 +836,3 @@ call_later(_frame++, time_source_units_frames, function() {
 	buffer_delete(_output_buffer);
 	_tokenizer.destroy();
 });
-

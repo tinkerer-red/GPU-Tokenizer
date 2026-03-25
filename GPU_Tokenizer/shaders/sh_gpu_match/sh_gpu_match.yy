@@ -1,7 +1,7 @@
 {
   "$GMShader":"",
-  "%Name":"sh_gpu_compile",
-  "name":"sh_gpu_compile",
+  "%Name":"sh_gpu_match",
+  "name":"sh_gpu_match",
   "parent":{
     "name":"Shaders",
     "path":"folders/GPU_Tokenizer/Shaders.yy",
