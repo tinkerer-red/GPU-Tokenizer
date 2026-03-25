@@ -330,7 +330,7 @@ The packed program favors compact byte-oriented storage. That keeps the represen
 
 These are the concrete implementation ceilings in the current build.
 
-### 64 active shader states
+### 512 active shader states
 
 The match shader uses fixed-size current and next state arrays of length 64. That is the current active-state budget for runtime NFA simulation.
 
@@ -338,7 +338,7 @@ The match shader uses fixed-size current and next state arrays of length 64. Tha
 
 Epsilon closure is iterated with a fixed 16-pass bound. Deep epsilon-heavy graphs can exceed this limit.
 
-### 65535-step NFA scan bound
+### 1kb-step NFA scan bound
 
 Per-start-position NFA stepping is bounded by a fixed maximum iteration count. This places a hard ceiling on how far a single match attempt can extend.
 
