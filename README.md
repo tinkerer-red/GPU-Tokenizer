@@ -416,32 +416,6 @@ Good for:
 * import tools
 * line-based structured text
 
-## Example: Semver Versions
-
-```gml
-var _tokenizer = new GPUTokenizer();
-
-_tokenizer.addPattern(@'\d+\.\d+\.\d+');
-_tokenizer.addPattern(@'\w[\w\d\-]*');
-_tokenizer.addDelimiter(@' \t\n');
-
-_tokenizer.compile();
-```
-
-## Example: IP Addresses and Numbers
-
-```gml
-var _tokenizer = new GPUTokenizer();
-
-_tokenizer.addPattern(@'(\d{1,3}\.){3}\d{1,3}');
-_tokenizer.addPattern(@'\d+\.\d+');
-_tokenizer.addPattern(@'\d+');
-_tokenizer.addPattern(@'\w+');
-_tokenizer.addDelimiter(@' \t\n');
-
-_tokenizer.compile();
-```
-
 ## Notes
 
 * The intended workflow is compile once, tokenize many times.
