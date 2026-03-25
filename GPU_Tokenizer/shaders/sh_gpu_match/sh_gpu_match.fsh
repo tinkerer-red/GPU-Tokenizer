@@ -17,17 +17,17 @@ varying vec2 v_vTexcoord;
 #define GPU_TOK_OP_SPLIT 5.0
 
 #define GPU_TOK_NULL_INDEX 255.0
-#define GPU_TOK_MAX_SHADER_STATES 64
+#define GPU_TOK_MAX_SHADER_STATES 512
 #define GPU_TOK_MAX_EPSILON_PASSES 16
 #define GPU_TOK_BYTE_MAX 255.0
 #define GPU_TOK_BYTE_RADIX 256.0
 #define GPU_TOK_ACTIVE_THRESHOLD 0.5
 #define GPU_TOK_ZERO_LENGTH_SENTINEL 0.001
 
-// Max input file size in megabytes. Total iterations: MB × 1024 × 1024.
+// Max single token length in kilbytes. Total iterations: KB × 1024.
 // Each loop level must stay under 65535 for HLSL transpiler, so max value is 65535.
 // Practical limit is GPU surface dimensions (~128 MB at 8192x8192).
-#define GPU_TOK_MAX_MATCH_MB 1
+#define GPU_TOK_MAX_MATCH_KB 1
 
 
 // gm_BaseTexture = input bytes
@@ -143,73 +143,70 @@ void main() {
                 }
 
                 // Simulate NFA byte by byte
-                // Triple loop: GPU_TOK_MAX_MATCH_MB × 1024 × 1024 bytes max token length
+                // Triple loop: GPU_TOK_MAX_MATCH_KB × 1024 × 1024 bytes max token length
                 float fi = startPos;
                 float bytesConsumed = 0.0;
-                for (int outer = 0; outer < GPU_TOK_MAX_MATCH_MB; outer++) {
+                for (int outer = 0; outer < GPU_TOK_MAX_MATCH_KB; outer++) {
                     if (fi >= u_totalBytes) break;
                     for (int middle = 0; middle < 1024; middle++) {
                         if (fi >= u_totalBytes) break;
-                        for (int inner = 0; inner < 1024; inner++) {
-                            if (fi >= u_totalBytes) break;
 
-                            float curByte = fetchByte(fi);
-                            float curByteVal = floor(curByte * GPU_TOK_BYTE_MAX + GPU_TOK_ACTIVE_THRESHOLD);
+                        float curByte = fetchByte(fi);
+                        float curByteVal = floor(curByte * GPU_TOK_BYTE_MAX + GPU_TOK_ACTIVE_THRESHOLD);
 
-                            // Compute next state set
-                            for (int s = 0; s < GPU_TOK_MAX_SHADER_STATES; s++) next[s] = 0.0;
+                        // Compute next state set
+                        for (int s = 0; s < GPU_TOK_MAX_SHADER_STATES; s++) next[s] = 0.0;
 
-                            bool anyActive = false;
+                        bool anyActive = false;
+                        for (int s = 0; s < GPU_TOK_MAX_SHADER_STATES; s++) {
+                            if (curr[s] < GPU_TOK_ACTIVE_THRESHOLD) continue;
+                            if (float(s) >= u_numStates) continue;
+                            vec4 st = readState(float(s));
+
+                            if (st.r == GPU_TOK_OP_CHAR && st.a == curByteVal) {
+                                if (st.g < GPU_TOK_NULL_INDEX) { next[int(st.g)] = 1.0; anyActive = true; }
+                            }
+                            if (st.r == GPU_TOK_OP_CLASS && classMatches(st.a, curByteVal)) {
+                                if (st.g < GPU_TOK_NULL_INDEX) { next[int(st.g)] = 1.0; anyActive = true; }
+                            }
+                            if (st.r == GPU_TOK_OP_ANY) {
+                                if (st.g < GPU_TOK_NULL_INDEX) { next[int(st.g)] = 1.0; anyActive = true; }
+                            }
+                        }
+
+                        if (!anyActive) { fi = u_totalBytes; break; }
+
+                        // Epsilon closure on next
+                        for (int pass = 0; pass < GPU_TOK_MAX_EPSILON_PASSES; pass++) {
+                            bool changed2 = false;
                             for (int s = 0; s < GPU_TOK_MAX_SHADER_STATES; s++) {
-                                if (curr[s] < GPU_TOK_ACTIVE_THRESHOLD) continue;
+                                if (next[s] < GPU_TOK_ACTIVE_THRESHOLD) continue;
                                 if (float(s) >= u_numStates) continue;
                                 vec4 st = readState(float(s));
-
-                                if (st.r == GPU_TOK_OP_CHAR && st.a == curByteVal) {
-                                    if (st.g < GPU_TOK_NULL_INDEX) { next[int(st.g)] = 1.0; anyActive = true; }
+                                if (st.r == GPU_TOK_OP_JUMP) {
+                                    if (st.g < GPU_TOK_NULL_INDEX && next[int(st.g)] < GPU_TOK_ACTIVE_THRESHOLD) { next[int(st.g)] = 1.0; changed2 = true; }
                                 }
-                                if (st.r == GPU_TOK_OP_CLASS && classMatches(st.a, curByteVal)) {
-                                    if (st.g < GPU_TOK_NULL_INDEX) { next[int(st.g)] = 1.0; anyActive = true; }
-                                }
-                                if (st.r == GPU_TOK_OP_ANY) {
-                                    if (st.g < GPU_TOK_NULL_INDEX) { next[int(st.g)] = 1.0; anyActive = true; }
+                                if (st.r == GPU_TOK_OP_SPLIT) {
+                                    if (st.g < GPU_TOK_NULL_INDEX && next[int(st.g)] < GPU_TOK_ACTIVE_THRESHOLD) { next[int(st.g)] = 1.0; changed2 = true; }
+                                    if (st.b < GPU_TOK_NULL_INDEX && next[int(st.b)] < GPU_TOK_ACTIVE_THRESHOLD) { next[int(st.b)] = 1.0; changed2 = true; }
                                 }
                             }
-
-                            if (!anyActive) { fi = u_totalBytes; break; }
-
-                            // Epsilon closure on next
-                            for (int pass = 0; pass < GPU_TOK_MAX_EPSILON_PASSES; pass++) {
-                                bool changed2 = false;
-                                for (int s = 0; s < GPU_TOK_MAX_SHADER_STATES; s++) {
-                                    if (next[s] < GPU_TOK_ACTIVE_THRESHOLD) continue;
-                                    if (float(s) >= u_numStates) continue;
-                                    vec4 st = readState(float(s));
-                                    if (st.r == GPU_TOK_OP_JUMP) {
-                                        if (st.g < GPU_TOK_NULL_INDEX && next[int(st.g)] < GPU_TOK_ACTIVE_THRESHOLD) { next[int(st.g)] = 1.0; changed2 = true; }
-                                    }
-                                    if (st.r == GPU_TOK_OP_SPLIT) {
-                                        if (st.g < GPU_TOK_NULL_INDEX && next[int(st.g)] < GPU_TOK_ACTIVE_THRESHOLD) { next[int(st.g)] = 1.0; changed2 = true; }
-                                        if (st.b < GPU_TOK_NULL_INDEX && next[int(st.b)] < GPU_TOK_ACTIVE_THRESHOLD) { next[int(st.b)] = 1.0; changed2 = true; }
-                                    }
-                                }
-                                if (!changed2) break;
-                            }
-
-                            bytesConsumed += 1.0;
-
-                            // Check if MATCH is reachable
-                            for (int s = 0; s < GPU_TOK_MAX_SHADER_STATES; s++) {
-                                if (next[s] > GPU_TOK_ACTIVE_THRESHOLD && float(s) < u_numStates) {
-                                    vec4 st = readState(float(s));
-                                    if (st.r == GPU_TOK_OP_MATCH) bestLen = bytesConsumed;
-                                }
-                            }
-
-                            // Swap curr = next
-                            for (int s = 0; s < GPU_TOK_MAX_SHADER_STATES; s++) curr[s] = next[s];
-                            fi += 1.0;
+                            if (!changed2) break;
                         }
+
+                        bytesConsumed += 1.0;
+
+                        // Check if MATCH is reachable
+                        for (int s = 0; s < GPU_TOK_MAX_SHADER_STATES; s++) {
+                            if (next[s] > GPU_TOK_ACTIVE_THRESHOLD && float(s) < u_numStates) {
+                                vec4 st = readState(float(s));
+                                if (st.r == GPU_TOK_OP_MATCH) bestLen = bytesConsumed;
+                            }
+                        }
+
+                        // Swap curr = next
+                        for (int s = 0; s < GPU_TOK_MAX_SHADER_STATES; s++) curr[s] = next[s];
+                        fi += 1.0;
                     }
                 }
             }
