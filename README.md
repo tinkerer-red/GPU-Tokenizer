@@ -1,12 +1,12 @@
-# GPU Tokenizer
+# GPUTokenizer
 
 A GPU-based tokenizer for GameMaker.
 
-GPU Tokenizer lets you define token rules in GML, compile those rules once, then tokenize input strings or buffers on the GPU. It is intended for projects that need fast, repeatable tokenization for things like source code, markup, or structured text.
+GPUTokenizer lets you define token rules in GML, compile those rules once, then tokenize input strings or buffers on the GPU. It is intended for projects that need fast, repeatable tokenization for things like source code, markup, or structured text. 
 
 ## What it does
 
-GPUTokenizer gives you a small rule system built around:
+GPUTokenizer is built around five rule types:
 
 - patterns
 - contexts
@@ -14,13 +14,7 @@ GPUTokenizer gives you a small rule system built around:
 - ignored bytes
 - unmatched-byte handling
 
-Typical use cases include:
-
-- source-code tokenization
-- markup tokenization
-- structured text splitting
-- syntax highlighting
-- preprocessing and import pipelines
+Typical uses include source-code tokenization, markup tokenization, structured text splitting, syntax highlighting, and preprocessing/import pipelines. :contentReference[oaicite:1]{index=1}
 
 ## Basic workflow
 
@@ -29,7 +23,7 @@ Typical use cases include:
 3. Call `compile()`.
 4. Call `tokenize()` or `tokenizeBuffer()`.
 5. Read tokens from the returned buffer.
-6. Destroy the tokenizer when finished.
+6. Destroy the tokenizer when finished. :contentReference[oaicite:2]{index=2}
 
 ## API
 
@@ -48,6 +42,8 @@ Use this for things like:
 - operators
 - punctuation
 - plain text runs
+
+Supported pattern building blocks include literals, character classes, dot, and the common repetition operators `*`, `+`, and `?`. The current implementation compiles patterns into an internal NFA-style GPU program during `compile()`. :contentReference[oaicite:3]{index=3}
 
 Examples:
 
@@ -118,9 +114,7 @@ GPU_TOKEN.CONCATENATE
 
 ### `compile()`
 
-Finalizes the rule set and builds the internal GPU lookup data.
-
-Call this after adding rules and before tokenizing.
+Finalizes the current rule set and builds the internal compiled GPU program data used during tokenization. Call this after adding rules and before tokenizing.
 
 ### `tokenize(_input)`
 
@@ -138,7 +132,7 @@ Use this when your source text is already in a buffer or when you want exact byt
 
 Frees the tokenizer's internal resources.
 
-Returned output buffers are still owned by the caller and must be deleted separately.
+Returned output buffers are still owned by the caller and must be deleted separately. 
 
 ## Reading output
 
@@ -184,7 +178,7 @@ Good for:
 * GameMaker source
 * syntax highlighters
 * preprocessors
-* compiler front-ends
+* compiler front-ends 
 
 ## Example: BBCode
 
@@ -206,7 +200,7 @@ Good for:
 
 * forum-style markup
 * chat formatting
-* rich text preprocessors
+* rich text preprocessors 
 
 ## Example: CSV-Like Split
 
@@ -224,7 +218,7 @@ Good for:
 
 * simple comma-separated data
 * import tools
-* line-based structured text
+* line-based structured text 
 
 ## Notes
 
@@ -233,7 +227,7 @@ Good for:
 * `tokenizeBuffer()` is preferred when your input already exists as raw bytes.
 * Delimiters split tokens.
 * Ignore rules remove bytes entirely.
-* Context rules are best used for strings and comments.
+* Context rules are best used for strings and comments, and are handled separately from normal pattern matching.
 
 ## Credits
 
